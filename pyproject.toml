@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qusec"
+version = "0.1.0"
+description = "Quantum Security Framework for Quantum Digital Signature Threat Detection"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "qiskit~=2.5",
+    "qiskit-aer~=0.17",
+    "rich~=15.0"
+]
+authors = [
+    { name = "QuSec Developers" }
+]
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Security :: Cryptography"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest~=9.1"
+]
+hardware = [
+    "qiskit-ibm-runtime~=0.50"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/qusec/qusec"
+
+[project.scripts]
+qusec = "qusec.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
