@@ -1,6 +1,13 @@
 # QuSec - Quantum Security Framework
 
-QuSec is a comprehensive Quantum Security Framework designed for Quantum Digital Signature (QDS) threat detection. It leverages Qiskit to simulate a quantum-safe teleportation-based QDS protocol layered with the SARG04 decoy-state method to detect active tampering, forgery, and interception attacks.
+## Description
+QuSec is a comprehensive Quantum Security Framework designed for Quantum Digital Signature (QDS) threat detection.
+
+## Introduction
+It leverages Qiskit to simulate a quantum-safe teleportation-based QDS protocol layered with the SARG04 decoy-state method to detect active tampering, forgery, and interception attacks.
+
+## PyPI Link
+[QuSec on PyPI](https://pypi.org/project/qusec/)
 
 ## 🚀 Features
 
@@ -15,7 +22,7 @@ QuSec is a comprehensive Quantum Security Framework designed for Quantum Digital
 
 ---
 
-## 📦 Installation
+## 📦 Installation Guide
 
 To install QuSec, ensure you have Python 3.9+ installed.
 
@@ -39,7 +46,7 @@ pip install -e ".[hardware]"
 
 ---
 
-## 💻 Usage
+## 💻 Quickstart
 
 QuSec comes with a beautiful, fully-interactive Terminal User Interface (TUI). 
 
@@ -100,4 +107,4 @@ When using the interactive simulator (`qusec run`), you will be prompted to simu
                Projective/SARG04 Security Pipeline
 ```
 
-*Built for Smart India Hackathon problem statement SIH26141.*
+
