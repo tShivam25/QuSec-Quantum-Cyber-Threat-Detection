@@ -1,5 +1,8 @@
-# QuSec - Quantum Security Framework
+<h1 align="center">QuSec - Quantum Security Framework</h1>
 
+<p align="center">
+  <img src="QuSec GitHub README banner.png" alt="QuSec Banner">
+</p>
 ## Description
 QuSec is a comprehensive Quantum Security Framework designed for Quantum Digital Signature (QDS) threat detection.
 
