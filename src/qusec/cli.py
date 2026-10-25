@@ -19,6 +19,16 @@ def main():
     run_parser.add_argument("--backend", choices=["simulator", "noisy", "hardware"], help="Backend execution mode")
     run_parser.add_argument("--shots", type=int, default=1000, help="Number of shots for verification")
     run_parser.add_argument("--threshold", type=float, default=0.06, help="QBER threshold")
+    run_parser.add_argument(
+        "--attack",
+        choices=[
+            "none", "forgery", "impersonation", "replay", "unauthorized_verification",
+            "tampering", "intercept_resend", "disturbance", "custom",
+            "1", "2", "3", "4", "5", "6", "7", "8", "9"
+        ],
+        default=None,
+        help="Simulate attack vector directly"
+    )
     run_parser.add_argument("--mu-probability", type=float, default=0.6, help="Probability of mu decoy state")
     run_parser.add_argument("--nu-probability", type=float, default=0.3, help="Probability of nu decoy state")
     run_parser.add_argument("--vac-probability", type=float, default=0.1, help="Probability of vacuum decoy state")
@@ -45,7 +55,8 @@ def main():
             vac_prob=getattr(args, 'vac_probability', 0.1),
             verbose=getattr(args, 'verbose', False),
             debug=getattr(args, 'debug', False),
-            json_output=getattr(args, 'json', False)
+            json_output=getattr(args, 'json', False),
+            attack=getattr(args, 'attack', None),
         )
         simulator.run()
         return 0

@@ -37,3 +37,23 @@ def construct_payload(message: str):
         "key_end": len(payload)
     }
     return payload, metadata
+
+
+class QuantumDigitalSignature:
+    """
+    Quantum Digital Signature protocol wrapper.
+    Handles signature generation, verification, and payload assembly.
+    """
+    def __init__(self, key_length: int = 20):
+        self.key_length = key_length
+
+    def sign(self, message: str) -> list[int]:
+        return generate_signature(message)
+
+    def prepare_payload(self, message: str):
+        return construct_payload(message)
+
+    def verify(self, message: str, signature_bits: list[int]) -> bool:
+        expected = generate_signature(message)
+        return expected == signature_bits
+
