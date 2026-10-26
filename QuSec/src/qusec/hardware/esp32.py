@@ -138,6 +138,21 @@ class ESP32Device:
         res = self.send_command(f"TX {hex_data}")
         return bool(res and isinstance(res, dict) and res.get("status") == "OK")
 
+    def set_alarm(self, enable: bool = True, blink_ms: int = 150) -> bool:
+        """Trigger or clear security alarm LED (second LED, GPIO 4) on ESP32."""
+        if not self.is_connected:
+            return False
+        cmd = f"ALARM {'1' if enable else '0'} {blink_ms}"
+        res = self.send_command(cmd)
+        return bool(res and isinstance(res, dict) and res.get("status") == "OK")
+
+    def set_role(self, role: str) -> bool:
+        """Configure device role on the ESP32 (SENDER or RECEIVER)."""
+        if not self.is_connected:
+            return False
+        res = self.send_command(f"SET_ROLE {role.upper()}")
+        return bool(res and isinstance(res, dict) and res.get("status") == "OK")
+
 
 class ESP32Detector:
     """Scans system serial interfaces to auto-detect attached ESP32 boards."""

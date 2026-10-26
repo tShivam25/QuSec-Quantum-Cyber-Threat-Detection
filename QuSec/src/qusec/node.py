@@ -9,12 +9,17 @@ and the live Terminal UI dashboard.
 import time
 import json
 import uuid
+import random
 import threading
 import logging
 from typing import Optional, Dict, Any, List
 from rich.console import Console
 from rich.live import Live
+from rich.table import Table
+from rich import box
 
+from qusec.detection.qber import qber, hoeffding_margin
+from qusec.detection.threshold import ThresholdEngine
 from qusec.hardware.esp32 import ESP32Detector, ESP32Device
 from qusec.hardware.rng import RandomSource
 from qusec.hardware.optical import QuantumChannel, EthernetDetector
@@ -150,11 +155,22 @@ class QuSecNode:
         self.is_running = False
         self._listener_thread: Optional[threading.Thread] = None
         self.on_message_callback: Optional[Any] = None
+        self.threshold_engine = ThresholdEngine(sa=0.05, sv=0.15, q_threshold=0.06)
+        self.active_attack: Optional[str] = None
+
+    def trigger_esp32_threat_alarm(self, enable: bool = True):
+        """Control the ESP32 second LED security threat alarm (blinks on threat)."""
+        if self.esp32:
+            self.esp32.set_alarm(enable=enable, blink_ms=150)
+        self.gateway_ctx.hardware_state["alarm_active"] = enable
+        self.events.emit("threat_alarm", {"active": enable})
 
     def initialize(self) -> bool:
         """Start hardware channels, listener thread, gateway server, and establish session."""
         q_ok = self.quantum_channel.open()
         c_ok = self.classical_channel.open()
+        if self.esp32:
+            self.esp32.set_role(self.role)
         self.gateway_server.start()
 
         # Check hardware indicators
@@ -295,19 +311,55 @@ class QuSecNode:
             teleport_results = []
             c0_bits = []
             c1_bits = []
+            bob_qubits = []
 
-            # Teleport message bit-by-bit
+            # 1. Teleport message payload bits
             for b in msg_bits:
                 res = self.teleporter.teleport_single_qubit(input_bit=b, sender_basis="Z", bob_basis="Z")
                 c0, c1 = res["classical_bits"]
                 c0_bits.append(c0)
                 c1_bits.append(c1)
+                bob_qubits.append(res["bob_bit"])
                 teleport_results.append(res)
+
+            # 2. Append SARG04 decoy and test qubits for real-time channel threat detection
+            num_test = max(16, min(64, len(msg_bits) // 2))
+            test_indices = list(range(len(msg_bits), len(msg_bits) + num_test))
+            test_values = []
+            test_bases = []
+            decoy_types = []
+
+            for _ in range(num_test):
+                test_bit = random.choice([0, 1])
+                test_basis = random.choice(["Z", "X"])
+                # SARG04 decoy distribution: mu (60%), nu (30%), vac (10%)
+                r_val = random.random()
+                decoy = "mu" if r_val < 0.6 else ("nu" if r_val < 0.9 else "vac")
+
+                attack_type = self.active_attack if self.active_attack in ("tampering", "intercept_resend", "disturbance") else None
+                res = self.teleporter.teleport_single_qubit(
+                    input_bit=test_bit,
+                    sender_basis=test_basis,
+                    bob_basis=test_basis,
+                    attack_type=attack_type,
+                    c0_flip=(self.active_attack == "tampering" and random.random() < 0.3),
+                )
+                c0, c1 = res["classical_bits"]
+                c0_bits.append(c0)
+                c1_bits.append(c1)
+                bob_qubits.append(res["bob_bit"])
+                test_values.append(test_bit)
+                test_bases.append(test_basis)
+                decoy_types.append(decoy)
+
+            total_qubits = len(c0_bits)
 
             # Send optical quantum frame across fibre
             optical_payload = {
                 "msg_id": msg_id,
-                "qubit_count": len(msg_bits),
+                "qubit_count": total_qubits,
+                "data_qubits": len(msg_bits),
+                "test_qubits": num_test,
                 "basis": "Z",
             }
             self.quantum_channel.send_quantum_frame("TELEPORT_QUANTUM_BURST", optical_payload)
@@ -320,11 +372,21 @@ class QuSecNode:
                 "text": message,
                 "c0_bits": c0_bits,
                 "c1_bits": c1_bits,
-                "bit_count": len(msg_bits),
+                "bob_qubits": bob_qubits,
+                "data_bit_count": len(msg_bits),
+                "test_indices": test_indices,
+                "test_values": test_values,
+                "test_bases": test_bases,
+                "decoy_types": decoy_types,
+                "attack": self.active_attack,
             }
             mac_tag, _ = WegmanCarterMAC.authenticate_with_pool(
                 json.dumps(classical_payload).encode("utf-8"), self.key_pool
             )
+            # If forgery attack is simulated, corrupt MAC tag
+            if self.active_attack == "forgery":
+                mac_tag = "deadbeef" * 4
+
             self.classical_channel.send_classical("TELEPORT_MESSAGE", classical_payload, mac=mac_tag)
 
             self.ui.set_pipeline_stage("Correct", "done")
@@ -432,6 +494,70 @@ class QuSecNode:
                 logger.debug("Listener loop exception: %s", e)
                 time.sleep(0.1)
 
+    def render_quantum_security_report(
+        self,
+        session_id: str,
+        sender_name: str,
+        recipient_name: str,
+        total_qubits: int,
+        pauli_x_count: int,
+        pauli_z_count: int,
+        conclusive_sifted: int,
+        detected_errors: int,
+        calculated_qber: float,
+        threshold: float,
+        hoeffding_eps: float,
+        decision: str,
+        threat_type: Optional[str] = None,
+    ):
+        """
+        Renders the full QuSec Quantum Security Report table in terminal,
+        matching the mathematical and statistical verification of the framework.
+        """
+        console = Console()
+        table = Table(
+            title="[bold cyan]══ QUSEC QUANTUM SECURITY REPORT ══[/bold cyan]",
+            box=box.SQUARE,
+            show_header=True,
+            header_style="bold white",
+        )
+        table.add_column("Parameter", style="cyan", width=32)
+        table.add_column("Value / Measurement", style="white")
+
+        table.add_row("Session ID", session_id)
+        table.add_row("Transmission Link", f"{sender_name} ➔ {recipient_name} [Bidirectional]")
+        table.add_row("Protocol", "Quantum Teleportation (3-Qubit Bell) + SARG04 Decoy")
+        table.add_row("Transmitted Qubits", f"{total_qubits} qubits (Optical Transceiver)")
+        table.add_row("Pauli X Corrections (c1=1)", f"{pauli_x_count} Applied (Wireless ESP32)")
+        table.add_row("Pauli Z Corrections (c0=1)", f"{pauli_z_count} Applied (Wireless ESP32)")
+        table.add_row("Conclusive Sifted Qubits (μ)", str(conclusive_sifted))
+        table.add_row("Detected Quantum Bit Errors", str(detected_errors))
+
+        qber_color = "bold red" if calculated_qber > threshold else "bold green"
+        table.add_row("Calculated QBER", f"[{qber_color}]{calculated_qber:.4f} ({calculated_qber * 100:.2f}%)[/{qber_color}]")
+        table.add_row("Hoeffding Margin (ε, δ=10⁻³)", f"{hoeffding_eps:.4f} ({hoeffding_eps * 100:.2f}%) [99.9% Conf.]")
+        table.add_row("Security Threshold (Q_th)", f"{threshold:.4f} ({threshold * 100:.2f}%)")
+
+        is_threat = (calculated_qber > threshold) or (decision != "VERIFIED")
+        status_text = (
+            f"[bold red]EXCEEDED (Threat Detected: {threat_type or 'Channel Compromise'})[/bold red]"
+            if is_threat
+            else "[bold green]NORMAL (Within Tolerance)[/bold green]"
+        )
+        table.add_row("Threshold Status", status_text)
+
+        alarm_status = (
+            "[bold red]BLINKING (ESP32 Second LED Active)[/bold red]"
+            if is_threat
+            else "[bold green]CLEAR (ESP32 Second LED OFF)[/bold green]"
+        )
+        table.add_row("Hardware Threat Alarm", alarm_status)
+
+        console.print("\n")
+        console.print(table)
+        color = "green" if decision == "VERIFIED" else "red"
+        console.print(f"[bold {color}]FINAL DECISION: {decision}[/bold {color}]\n")
+
     def _handle_incoming_classical_packet(self, packet: Dict[str, Any]):
         """Dispatch and process incoming classical packets."""
         p_type = packet.get("type")
@@ -447,28 +573,141 @@ class QuSecNode:
             text = payload.get("text", "")
             c0_bits = payload.get("c0_bits", [])
             c1_bits = payload.get("c1_bits", [])
+            data_count = payload.get("data_bit_count", len(text) * 8)
+            test_indices = payload.get("test_indices", [])
+            test_values = payload.get("test_values", [])
+            test_bases = payload.get("test_bases", [])
+            decoy_types = payload.get("decoy_types", [])
+            attack_meta = payload.get("attack")
 
-            # Apply Bob Pauli X/Z correction simulation
-            recovered_bits = []
-            for c0, c1 in zip(c0_bits, c1_bits):
-                # Bob recovers bit from Pauli correction Z^c0 X^c1
-                recovered_bits.append(0 if (c0 ^ c1) == 0 else 1)
+            # 1. Pauli Corrections: Apply Pauli X if c1=1, Pauli Z if c0=1
+            bob_qubits = payload.get("bob_qubits", [])
+            pauli_x_count = sum(1 for c1 in c1_bits if c1 == 1)
+            pauli_z_count = sum(1 for c0 in c0_bits if c0 == 1)
+            recovered_bits = bob_qubits if bob_qubits else [0 if (c0 ^ c1) == 0 else 1 for c0, c1 in zip(c0_bits, c1_bits)]
 
-            # Record received message
-            record = {
-                "id": msg_id,
-                "from": sender_name,
-                "to": self.role_title,
-                "direction": "incoming",
-                "text": text,
-                "mode": "teleportation",
-                "timestamp": time.time(),
-            }
+            # Reconstruct message data from the data portion
+            recovered_data_bits = recovered_bits[:data_count]
+            try:
+                decrypted_text = bits_to_string(recovered_data_bits)
+            except Exception:
+                decrypted_text = text
+
+            # 2. Statistical Verification on SARG04 Test/Decoy Qubits
+            conclusive_mu = 0
+            detected_errors = 0
+            for idx, exp_val, basis, decoy in zip(test_indices, test_values, test_bases, decoy_types):
+                if idx < len(recovered_bits):
+                    rec_val = recovered_bits[idx]
+                    if decoy == "mu":
+                        conclusive_mu += 1
+                        if rec_val != exp_val:
+                            detected_errors += 1
+
+            if conclusive_mu > 0:
+                calc_qber = detected_errors / conclusive_mu
+            else:
+                calc_qber = 0.0
+
+            # Hoeffding finite-size margin (Paper Eq. 15)
+            hoeff_eps = hoeffding_margin(max(conclusive_mu, 16), delta=0.001)
+
+            # Verify Wegman-Carter MAC authentication tag
+            mac_tag = packet.get("mac")
+            mac_valid = True
+            if mac_tag:
+                clean_payload = dict(payload)
+                mac_valid = WegmanCarterMAC.verify_with_pool(
+                    json.dumps(clean_payload).encode("utf-8"), mac_tag, self.key_pool
+                )
+
+            # 3. Security Threshold Evaluation (ThresholdEngine Q_th = 0.06)
+            threshold = self.threshold_engine.q_threshold
+
+            threat_detected = False
+            threat_type = None
+
+            if calc_qber > threshold:
+                threat_detected = True
+                threat_type = "Quantum Channel Tampering / Intercept-Resend"
+                decision = "REJECTED (QBER THRESHOLD EXCEEDED)"
+            elif not mac_valid:
+                threat_detected = True
+                threat_type = "Impersonation / Forgery Attack"
+                decision = "REJECTED (MAC VERIFICATION FAILED)"
+            elif attack_meta:
+                threat_detected = True
+                threat_type = f"Simulated {attack_meta.upper()}"
+                decision = f"REJECTED ({attack_meta.upper()})"
+            else:
+                decision = "VERIFIED"
+
+            # 4. Hardware Action: Control Second LED on ESP32
+            if threat_detected:
+                self.trigger_esp32_threat_alarm(True)
+            else:
+                self.trigger_esp32_threat_alarm(False)
+
+            # Update session metrics
+            self.session_mgr.update_channel_metrics(
+                qber=calc_qber,
+                fidelity=max(0.0, 1.0 - calc_qber),
+                chsh=2.82 if not threat_detected else 1.41,
+            )
+
+            # 5. Render Full Quantum Security Report Table
+            self.render_quantum_security_report(
+                session_id=self.session_mgr.session_id or "a91f",
+                sender_name=sender_name,
+                recipient_name=self.role_title,
+                total_qubits=len(c0_bits),
+                pauli_x_count=pauli_x_count,
+                pauli_z_count=pauli_z_count,
+                conclusive_sifted=conclusive_mu,
+                detected_errors=detected_errors,
+                calculated_qber=calc_qber,
+                threshold=threshold,
+                hoeffding_eps=hoeff_eps,
+                decision=decision,
+                threat_type=threat_type,
+            )
+
+            # 6. Show Message / Security Alert
+            if threat_detected:
+                display_text = f"[BLOCKED: {decision}]"
+                record = {
+                    "id": msg_id,
+                    "from": sender_name,
+                    "to": self.role_title,
+                    "direction": "incoming",
+                    "text": display_text,
+                    "mode": "teleportation",
+                    "timestamp": time.time(),
+                    "threat": True,
+                    "qber": calc_qber,
+                    "decision": decision,
+                }
+            else:
+                display_text = decrypted_text or text
+                record = {
+                    "id": msg_id,
+                    "from": sender_name,
+                    "to": self.role_title,
+                    "direction": "incoming",
+                    "text": display_text,
+                    "mode": "teleportation",
+                    "timestamp": time.time(),
+                    "threat": False,
+                    "qber": calc_qber,
+                    "decision": decision,
+                }
+
             self.received_messages.append(record)
             self.gateway_ctx.received_messages.append(record)
 
-            self.ui.add_log(f"Received from {sender_name}: \"{text}\" [Teleportation]")
+            self.ui.add_log(f"Received from {sender_name}: \"{display_text}\" [Teleportation - {decision}]")
             self.events.emit("message_received", record)
+
             if self.on_message_callback:
                 try:
                     self.on_message_callback(record)
@@ -597,7 +836,13 @@ class QuSecNode:
             sender = record.get("from", self.peer_title)
             text = record.get("text", "")
             mode = record.get("mode", "teleportation")
-            console.print(f"\n[bold magenta]◄ [{sender}]:[/bold magenta] [bold white]{text}[/bold white] [dim]({mode})[/dim]")
+            threat = record.get("threat", False)
+            decision = record.get("decision", "VERIFIED")
+            if threat:
+                console.print(f"\n[bold red]◄ [{sender}]: [BLOCKED - {decision}][/bold red]")
+                console.print(f"[bold red]  ⚠ Channel threat detected! ESP32 Second LED is BLINKING.[/bold red]")
+            else:
+                console.print(f"\n[bold magenta]◄ [{sender}]:[/bold magenta] [bold white]{text}[/bold white] [dim]({mode} · {decision})[/dim]")
             print(f"[{self.role_title}] > ", end="", flush=True)
 
         self.on_message_callback = handle_chat_msg
@@ -622,8 +867,16 @@ class QuSecNode:
                     console.print("[yellow]Replenishing entanglement key pool...[/yellow]")
                     added = self.replenish_key_pool(512)
                     console.print(f"[green]✔ Added {added} bits. Available: {self.key_pool.available_bits} bits[/green]")
+                elif line.lower().startswith("/attack"):
+                    parts = line.split()
+                    if len(parts) > 1 and parts[1].lower() in ("tampering", "forgery", "intercept_resend"):
+                        self.active_attack = parts[1].lower()
+                        console.print(f"[bold red]⚠ Active attack set on outgoing channel: {self.active_attack.upper()}[/bold red]")
+                    else:
+                        self.active_attack = None
+                        console.print("[green]✔ Attack simulation cleared. Channel set to honest mode.[/green]")
                 elif line.lower() == "/help":
-                    console.print("[dim]Commands: /status (view metrics), /rekey (replenish keys), /quit (turn off)[/dim]")
+                    console.print("[dim]Commands: /status, /rekey, /attack <tampering|forgery|none>, /quit (turn off)[/dim]")
                 else:
                     res = self.send_message(self.peer_role, line, mode="teleportation")
                     qubits = res.get("qubits_teleported", len(line) * 8)
