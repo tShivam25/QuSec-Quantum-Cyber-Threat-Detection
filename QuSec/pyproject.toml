@@ -36,10 +36,15 @@ hardware = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/qusec/qusec"
+"Homepage" = "https://github.com/tShivam25/Quantum-Channel-Monitoring-System"
+"Repository" = "https://github.com/tShivam25/Quantum-Channel-Monitoring-System"
 
 [project.scripts]
 qusec = "qusec.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -1,110 +1,44 @@
-<h1 align="center">QuSec - Quantum Security Framework</h1>
+# Quantum Channel Monitoring System (QCMS)
 
-<p align="center">
-  <img src="QuSec GitHub README banner.png" alt="QuSec Banner">
-</p>
-## Description
-QuSec is a comprehensive Quantum Security Framework designed for Quantum Digital Signature (QDS) threat detection.
-
-## Introduction
-It leverages Qiskit to simulate a quantum-safe teleportation-based QDS protocol layered with the SARG04 decoy-state method to detect active tampering, forgery, and interception attacks.
-
-## PyPI Link
-[QuSec on PyPI](https://pypi.org/project/qusec/)
-
-## 🚀 Features
-
-- **Teleportation-Based QDS**: Transmits signature payload using a 3-qubit Bell-state entanglement and Pauli corrections.
-- **SARG04 Protocol Integration**: Employs mathematical decoy states ($\mu$, $\nu$, vacuum) for sifting and quantum channel security.
-- **Attack Simulations**: Test real-time quantum threat vectors including Forgery, Impersonation, Intercept-Resend, Replay, and Channel Tampering.
-- **Multi-Backend Execution**:
-  - `Simulator`: Ideal local execution via Qiskit Aer.
-  - `Noisy`: Local simulation mapped with a configurable depolarizing noise model.
-  - `Hardware`: Secure execution loop ready for real IBM Quantum API connections.
-- **Dynamic Threat Analysis**: Dynamically calculates Quantum Bit Error Rate (QBER) and statistically evaluates it against security thresholds.
+A real-world quantum-secured communication and channel surveillance system combining **quantum-secure teleportation transport** with **real-time channel threat auditing**.
 
 ---
 
-## 📦 Installation Guide
+## 🏛️ Repository Architecture
 
-To install QuSec, ensure you have Python 3.9+ installed.
-
-### 1. Set up a virtual environment (Recommended)
-```bash
-python -m venv venv
-source venv/bin/activate  # On macOS/Linux
-# venv\Scripts\activate   # On Windows
-```
-
-### 2. Install QuSec
-Install QuSec directly in editable mode for local development:
-```bash
-pip install -e .
-```
-
-*(Optional)* If you plan on running your circuits on real IBM Quantum Hardware, install the hardware add-on:
-```bash
-pip install -e ".[hardware]"
-```
-
----
-
-## 💻 Quickstart
-
-QuSec comes with a beautiful, fully-interactive Terminal User Interface (TUI). 
-
-To launch the framework and start a secure message transfer, simply run:
-```bash
-qusec run
-```
-
-### Advanced Usage Flags
-You can skip the interactive menus by passing parameters directly to the CLI:
-
-- **View detailed transmission steps (Bit-by-Bit):**
-  ```bash
-  qusec run --verbose
-  ```
-- **Select a specific execution backend:**
-  ```bash
-  qusec run --backend noisy
-  ```
-- **Machine-readable JSON output (Great for CI/CD or logging):**
-  ```bash
-  qusec run --json
-  ```
-- **Tweak the mathematical constraints:**
-  ```bash
-  qusec run --shots 2000 --threshold 0.04
-  ```
-
-Run `qusec run --help` to see all available configuration options!
-
----
-
-## 🛡️ Simulating Attacks
-
-When using the interactive simulator (`qusec run`), you will be prompted to simulate a cyberattack vector.
-
-1. **No Attack**: The message transfers securely. QBER remains $0.0$, and the signature is `VERIFIED`.
-2. **Forgery / Impersonation**: Attempting to supply fake signature data. The verification layer catches the mathematical anomaly and blocks the transmission: `REJECTED`.
-3. **Quantum Channel Tampering**: Induces simulated `X` and `Z` errors in the teleportation channel. You will see the QBER instantly spike above the defined threshold (default `0.06`), triggering a `THREAT DETECTED` system halt.
-
----
-
-## 🌐 Real-World Hardware & Transport Architecture
-
-QuSec has been upgraded into a functional, real-world secure transport framework:
+This repository is organized into two primary frameworks:
 
 ```text
-Sender Laptop (Alice)                               Receiver Laptop (Bob)
+Quantum-Channel-Monitoring-System/
+├── QuSec/                     # Quantum-Secure Transport & Teleportation Framework
+│   ├── src/qusec/             # Core Python library (Node runtime, Quantum, Hardware, Crypto)
+│   ├── tests/                 # Unit & integration test suites
+│   ├── firmware/              # ESP32 C++ firmware for hardware TRNG & classical relay
+│   ├── web/                   # Web platform bridge SDK & live browser testbench
+│   ├── pyproject.toml         # Standalone pip package configuration
+│   └── README.md              # In-depth QuSec documentation & CLI guide
+│
+├── QAuditor/                  # Quantum Channel Threat Auditing & Monitoring (Upcoming)
+│   └── ...                    # Active eavesdropping detection, QBER telemetry & auditor nodes
+│
+└── README.md                  # System overview & hardware topology
+```
+
+---
+
+## 🔬 System & Hardware Architecture
+
+The end-to-end setup implements a physical 4-node quantum communication and auditing topology:
+
+```text
+Sender Laptop                                       Receiver Laptop
 ┌───────────────────────┐                           ┌───────────────────────┐
-│ QuSec Node (Alice)    │                           │ QuSec Node (Bob)      │
-│  ├── Gateway API      │                           │  ├── Gateway API      │
-│  ├── Key Pool         │                           │  ├── Key Pool         │
+│ QuSec Node (Sender)   │                           │ QuSec Node (Receiver) │
+│  ├── Gateway REST/SSE │                           │  ├── Gateway REST/SSE │
+│  ├── Key Pool (OTP)   │                           │  ├── Key Pool (OTP)   │
 │  └── Teleport Engine  │                           │  └── Teleport Engine  │
 └──────────┬────────────┘                           └───────────┬───────────┘
-           │ USB Serial                                         │ USB Serial
+           │ USB Serial (115200)                                │ USB Serial (115200)
 ┌──────────▼────────────┐                           ┌───────────▼───────────┐
 │ ESP32 Sender          │◄─── Classical Wireless ──►│ ESP32 Receiver        │
 │ (TRNG + Wi-Fi Relay)  │     (Wi-Fi / ESP-NOW)     │ (TRNG + Wi-Fi Relay)  │
@@ -114,81 +48,69 @@ Sender Laptop (Alice)                               Receiver Laptop (Bob)
 │ Optical Transceiver   │◄════ Optical Fibre Cable ═►│ Optical Transceiver   │
 │ Media Converter       │     (Quantum Channel)     │ Media Converter       │
 └───────────────────────┘                           └───────────────────────┘
+           ▲                                                    ▲
+           │                                                    │
+     [Attacker / Eve]                                    [Auditor / QAuditor]
+     ESP32 + Intercept                                   ESP32 + QBER Probe
 ```
 
-### Components
-1. **4 ESP32 Microcontrollers**: Sender (Alice), Receiver (Bob), Attacker (Eve), Auditor (QAuditor).
-2. **Optical Transceivers & Fibre Cable**: Full-duplex optical transceiver pair carrying quantum distribution and teleportation frames over Ethernet.
-3. **2 Ethernet Cables**: Connecting Sender and Receiver laptops to their respective optical media converters.
-4. **Auto-Detection**: QuSec automatically probes USB serial ports (`/dev/cu.usbserial*`, `/dev/ttyUSB*`) to detect ESP32 hardware and network interfaces to detect Ethernet converters.
-
-> **Honest Note on Security Model**: Key creation, reconciliation, and OTP encryption execute on the laptop endpoints. The browser-to-gateway hop is local plaintext. The system provides **laptop-to-laptop quantum-secure** transport.
+### Physical Hardware Components
+1. **4 ESP32 Microcontrollers**:
+   - **Sender ESP32**: Generates quantum randomness via hardware `esp_random()` TRNG and acts as the sender's classical Wi-Fi bridge.
+   - **Receiver ESP32**: Coordinates classical reconciliation frames and timing synchronization.
+   - **Attacker ESP32 (Eve)**: Intercept-resend and channel disturbance simulator.
+   - **Auditor ESP32 (QAuditor)**: Independent channel surveillance and telemetry probe.
+2. **Optical Transceiver Pair & Fibre Cable**:
+   - Media converters connecting via high-speed optical fibre carrying simulated quantum carrier frames over Ethernet.
+3. **2 Ethernet Cables**:
+   - Direct physical connection between Sender Laptop and Optical Media Converter, and between Receiver Laptop and Optical Media Converter.
+4. **Endpoint Laptops**:
+   - Running full-duplex QuSec nodes, local quantum circuit emulation (Qiskit / Aer), and social media web bridge gateways.
 
 ---
 
-## 🛠️ CLI Commands
+## ⚡ Quickstart: QuSec Package
 
-### 1. Link Diagnostics (`qusec doctor`)
-Self-test verifying Python environment, ESP32 USB detection, hardware TRNG entropy, Ethernet media converter link, and socket bindings:
+`QuSec` is a fully standalone Python package packaged under the `QuSec/` directory.
+
+### Installation
+
+#### Option 1: Install from Local Clone
+```bash
+git clone https://github.com/tShivam25/Quantum-Channel-Monitoring-System.git
+cd Quantum-Channel-Monitoring-System/QuSec
+pip install -e .
+```
+
+#### Option 2: Direct Global Installation via Pip
+```bash
+pip install "git+https://github.com/tShivam25/Quantum-Channel-Monitoring-System.git#subdirectory=QuSec"
+```
+
+### Diagnostics & Self-Test
+Verify all hardware, serial ports, and network channels:
 ```bash
 qusec doctor
 ```
 
-### 2. Interactive Node & Live UI (`qusec node`)
-Launches the live operational terminal dashboard:
+### Run Full-Duplex Quantum Chat Node
 ```bash
-# On Sender Laptop (Alice):
-qusec node --role alice
+# On Sender Laptop:
+qusec node --role sender
 
-# On Receiver Laptop (Bob):
-qusec node --role bob --peer-host <ALICE_IP>
+# On Receiver Laptop:
+qusec node --role receiver --peer-host <SENDER_IP>
 ```
 
-#### Terminal UI Display:
-```
-┌ QuSec · Alice ─────────────── ● Fibre OK  ● ESP32 OK ┐
-│ Session a91f · Key pool 4,820 bits · QBER 2.1%       │
-├ Pipeline ────────────────────────────────────────────┤
-│ Encode ✓  Entangle ✓  Test ✓  Teleport ▶  Correct ·  │
-├ Log ─────────────────────────────────────────────────┤
-│ 14:02:11 Bell pairs sent: 512 (64 test pairs)        │
-│ 14:02:12 Fidelity 0.97, CHSH 2.71 → channel trusted  │
-└──────────────────────────────────────────────────────┘
-```
-
-### 3. Social Media Platform Bridge Gateway (`qusec gateway`)
-Starts the local REST + SSE platform bridge for web applications:
+### Launch Social Media Platform Bridge Gateway
+Connect web applications and chat platforms to the local quantum transport:
 ```bash
-qusec gateway --role alice --port 8765
-```
-- `GET  /api/status` : Node status, active session, key pool, and quantum channel metrics.
-- `POST /api/send`   : Send message (`{"to": "bob", "message": "...", "mode": "teleportation"|"otp"}`).
-- `GET  /api/events` : Real-time Server-Sent Events (SSE) stream.
-- `POST /api/rekey`  : Trigger key pool replenishment round.
-
-### 4. Key Pool Inspector (`qusec keys`)
-Inspects active cryptographic key material, rekey triggers, and burn-on-use stats:
-```bash
-qusec keys
+qusec gateway --role sender --port 8765
 ```
 
-### 5. Quantum-Secure Send (`qusec send`)
-Transmits a message over the quantum link via state teleportation or One-Time-Pad:
-```bash
-qusec send --to bob "Hello Quantum Teleportation" --mode teleportation
-qusec send --to bob "Top Secret" --mode otp
-```
+For complete technical specifications, mathematical protocols (SARG04 + 3-qubit Bell teleportation), and REST API documentation, see the [QuSec Subdirectory Documentation](QuSec/README.md).
 
 ---
 
-## ⚡ ESP32 Firmware
-
-The ready-to-flash Arduino C++ firmware is provided in:
-`firmware/esp32_qusec/esp32_qusec.ino`
-
-Flash to each ESP32 board using Arduino IDE or PlatformIO:
-- True Hardware RNG via `esp_random()`
-- Wi-Fi Access Point / Station Classical Relay (Port `9877`)
-- Serial protocol interface at `115200` baud
-
-
+## 📄 License
+MIT License.
