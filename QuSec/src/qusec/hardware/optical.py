@@ -24,16 +24,27 @@ class EthernetDetector:
 
     @staticmethod
     def get_interfaces() -> List[Dict[str, Any]]:
-        """List system network interfaces with their IP and link status."""
+        """List system network interfaces with their IP and link status across Windows, Linux, and macOS."""
+        import platform
+        system = platform.system()
+
+        if system == "Windows":
+            return EthernetDetector._get_windows_interfaces()
+        elif system == "Linux":
+            return EthernetDetector._get_linux_interfaces()
+        else:
+            return EthernetDetector._get_bsd_interfaces()
+
+    @staticmethod
+    def _get_bsd_interfaces() -> List[Dict[str, Any]]:
+        """List macOS and BSD network interfaces via ifconfig."""
         interfaces = []
         try:
-            # Query ifconfig on macOS / BSD
             out = subprocess.check_output(["ifconfig"], text=True, stderr=subprocess.DEVNULL)
             current_iface = None
             iface_info: Dict[str, Any] = {}
 
             for line in out.splitlines():
-                # Interface header line: "en0: flags=..."
                 m = re.match(r"^([a-zA-Z0-9]+):\s+flags=", line)
                 if m:
                     if current_iface and iface_info:
@@ -67,6 +78,112 @@ class EthernetDetector:
         except Exception as e:
             logger.debug("ifconfig parsing error: %s", e)
 
+        return interfaces
+
+    @staticmethod
+    def _get_windows_interfaces() -> List[Dict[str, Any]]:
+        """List Windows network interfaces via PowerShell Get-NetAdapter or ipconfig /all."""
+        interfaces = []
+        # Primary method: PowerShell Get-NetAdapter
+        try:
+            cmd = ["powershell", "-NoProfile", "-Command", "Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, MacAddress | ConvertTo-Json -Compress"]
+            out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=4)
+            data = json.loads(out)
+            if isinstance(data, dict):
+                data = [data]
+            for item in data:
+                status_str = str(item.get("Status", "")).lower()
+                is_up = status_str in ("up", "connected")
+                name = str(item.get("Name", "Ethernet"))
+                desc = str(item.get("InterfaceDescription", ""))
+                is_eth = "ethernet" in name.lower() or any(k in desc.lower() for k in ["gbe", "ethernet", "realtek", "intel", "gigabit", "lan"])
+                interfaces.append({
+                    "name": name,
+                    "ip": None,
+                    "mac": item.get("MacAddress"),
+                    "status": "active" if is_up else "inactive",
+                    "is_ethernet": is_eth,
+                    "is_active": is_up,
+                })
+        except Exception as e:
+            logger.debug("PowerShell Get-NetAdapter error: %s", e)
+
+        # Augment with IP addresses from ipconfig /all
+        try:
+            out = subprocess.check_output(["ipconfig", "/all"], text=True, stderr=subprocess.DEVNULL, timeout=4)
+            current_name = None
+            current_mac = None
+            current_ip = None
+            is_disc = False
+
+            def save_prev():
+                if current_name:
+                    # Look for existing entry or add new
+                    for ifc in interfaces:
+                        if ifc["name"].lower() in current_name.lower() or current_name.lower() in ifc["name"].lower():
+                            if current_ip:
+                                ifc["ip"] = current_ip
+                            if current_mac and not ifc.get("mac"):
+                                ifc["mac"] = current_mac
+                            if not is_disc and current_ip:
+                                ifc["is_active"] = True
+                                ifc["status"] = "active"
+                            return
+                    interfaces.append({
+                        "name": current_name,
+                        "ip": current_ip,
+                        "mac": current_mac,
+                        "status": "inactive" if is_disc else "active",
+                        "is_ethernet": "ethernet" in current_name.lower(),
+                        "is_active": not is_disc and bool(current_ip),
+                    })
+
+            for line in out.splitlines():
+                if line and not line.startswith(" ") and ":" in line and not line.startswith("Windows IP"):
+                    save_prev()
+                    current_name = line.split(":", 1)[0].replace("adapter", "").strip()
+                    current_mac = None
+                    current_ip = None
+                    is_disc = False
+                if "Media State" in line and "disconnected" in line:
+                    is_disc = True
+                if "Physical Address" in line and ":" in line:
+                    current_mac = line.split(":", 1)[1].strip()
+                if "IPv4 Address" in line and ":" in line:
+                    current_ip = line.split(":", 1)[1].strip().replace("(Preferred)", "").strip()
+
+            save_prev()
+        except Exception as e:
+            logger.debug("ipconfig parsing error: %s", e)
+
+        return interfaces
+
+    @staticmethod
+    def _get_linux_interfaces() -> List[Dict[str, Any]]:
+        """List Linux network interfaces via ip link / ip addr."""
+        interfaces = []
+        try:
+            out = subprocess.check_output(["ip", "-j", "addr"], text=True, stderr=subprocess.DEVNULL)
+            data = json.loads(out)
+            for item in data:
+                ifname = item.get("ifname", "")
+                operstate = str(item.get("operstate", "")).lower()
+                is_up = operstate == "up"
+                ip = None
+                for addr_info in item.get("addr_info", []):
+                    if addr_info.get("family") == "inet":
+                        ip = addr_info.get("local")
+                        break
+                interfaces.append({
+                    "name": ifname,
+                    "ip": ip,
+                    "mac": item.get("address"),
+                    "status": "active" if is_up else "inactive",
+                    "is_ethernet": not ifname.startswith("lo") and not ifname.startswith("wl"),
+                    "is_active": is_up,
+                })
+        except Exception:
+            return EthernetDetector._get_bsd_interfaces()
         return interfaces
 
     @staticmethod
