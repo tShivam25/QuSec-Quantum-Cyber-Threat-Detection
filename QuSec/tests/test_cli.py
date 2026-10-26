@@ -48,3 +48,12 @@ def test_two_threshold_transferability():
     assert res_forged["verdict"] == "FORGED"
     assert res_forged["is_valid"] is False
     assert res_forged["is_transferable"] is False
+
+def test_qusec_interactive_chat(monkeypatch):
+    """Verify qusec chat command starts, responds to commands, and exits cleanly on /quit."""
+    from qusec.node import QuSecNode
+    node = QuSecNode(role="sender", force_simulation=True, gateway_port=8992)
+    inputs = iter(["/status", "/quit"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+    node.run_interactive_chat()
+    assert node.is_running is False

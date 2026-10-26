@@ -93,7 +93,17 @@ Verify all hardware, serial ports, and network channels:
 qusec doctor
 ```
 
-### Run Full-Duplex Quantum Chat Node
+### Continuous Interactive Quantum Chat
+Start continuous two-way quantum chat directly in your terminal (loops continuously until you turn it off):
+```bash
+# On Sender Laptop:
+qusec chat --role sender
+
+# On Receiver Laptop:
+qusec chat --role receiver --peer-host <SENDER_IP>
+```
+
+### Run Live Visual Dashboard Node
 ```bash
 # On Sender Laptop:
 qusec node --role sender

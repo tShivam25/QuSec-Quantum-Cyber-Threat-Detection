@@ -134,7 +134,21 @@ Self-test verifying Python environment, ESP32 USB detection, hardware TRNG entro
 qusec doctor
 ```
 
-### 2. Interactive Node & Live UI (`qusec node`)
+### 2. Continuous Interactive Quantum Chat (`qusec chat`)
+Runs continuous two-way interactive quantum chat directly in your terminal. Starts automatically as soon as users begin messaging, and loops continuously until turned off:
+```bash
+# On Sender Laptop:
+qusec chat --role sender
+
+# On Receiver Laptop:
+qusec chat --role receiver --peer-host <SENDER_IP>
+```
+- Real-time two-way messaging with quantum state teleportation.
+- Auto-initializes entanglement and key pool as soon as the first message is sent.
+- Concurrently runs the background Web Platform Gateway (`http://127.0.0.1:8765`) for social media website integration.
+- Loops continuously until you turn it off (`/quit` or `Ctrl+C`).
+
+### 3. Interactive Node & Live UI Dashboard (`qusec node`)
 Launches the live operational terminal dashboard:
 ```bash
 # On Sender Laptop:

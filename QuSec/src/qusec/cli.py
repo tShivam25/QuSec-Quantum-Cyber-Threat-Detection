@@ -178,6 +178,29 @@ def cmd_gateway(args):
     return 0
 
 
+def cmd_chat(args):
+    """Handle 'qusec chat' command - continuous interactive quantum chat."""
+    role = getattr(args, "role", "sender")
+    peer_host = getattr(args, "peer_host", "127.0.0.1")
+    force_sim = getattr(args, "sim", False)
+    optical_port = getattr(args, "optical_port", None)
+    classical_port = getattr(args, "classical_port", None)
+    gateway_port = getattr(args, "gateway_port", None)
+    esp32_port = getattr(args, "esp32_port", None)
+
+    node = QuSecNode(
+        role=role,
+        peer_host=peer_host,
+        optical_port=optical_port,
+        classical_port=classical_port,
+        gateway_port=gateway_port,
+        esp32_port=esp32_port,
+        force_simulation=force_sim,
+    )
+    node.run_interactive_chat()
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="qusec",
@@ -201,7 +224,17 @@ def main():
     node_parser.add_argument("--hardware", action="store_true", help="Prefer physical hardware links")
     node_parser.add_argument("--duration", type=int, default=None, help="Run for N seconds then exit")
 
-    # 3. qusec gateway
+    # 3. qusec chat (continuous interactive terminal chat)
+    chat_parser = subparsers.add_parser("chat", help="Start continuous interactive two-way quantum chat")
+    chat_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob"], default="sender", help="Node role: sender or receiver (default: sender)")
+    chat_parser.add_argument("--peer-host", default="127.0.0.1", help="Peer IP address (default: 127.0.0.1)")
+    chat_parser.add_argument("--optical-port", type=int, default=None, help="Optical channel UDP port")
+    chat_parser.add_argument("--classical-port", type=int, default=None, help="Classical channel UDP port")
+    chat_parser.add_argument("--gateway-port", type=int, default=None, help="HTTP API gateway port")
+    chat_parser.add_argument("--esp32-port", default=None, help="ESP32 serial port")
+    chat_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
+
+    # 4. qusec gateway
     gateway_parser = subparsers.add_parser("gateway", help="Run platform bridge API gateway")
     gateway_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob"], default="sender", help="Node role (default: sender)")
     gateway_parser.add_argument("--port", type=int, default=8765, help="Gateway HTTP port (default: 8765)")
@@ -251,6 +284,9 @@ def main():
 
     if args.command == "node":
         return cmd_node(args)
+
+    if args.command == "chat":
+        return cmd_chat(args)
 
     if args.command == "gateway":
         return cmd_gateway(args)

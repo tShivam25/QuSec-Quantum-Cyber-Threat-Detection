@@ -168,3 +168,16 @@ class SessionManager:
         """Gracefully terminate session and burn remaining keys."""
         self.state = SessionState.TERMINATED
         self.key_pool.burn_all()
+
+    def get_session_summary(self) -> Dict[str, Any]:
+        """Return summary dictionary of active session metrics."""
+        return {
+            "session_id": self.session_id or "idle",
+            "state": self.state,
+            "role": self.role,
+            "peer_role": self.peer_role,
+            "qber": self.current_qber,
+            "fidelity": self.current_fidelity,
+            "chsh": self.current_chsh,
+            "trusted": self.channel_trusted,
+        }

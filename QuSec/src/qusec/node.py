@@ -149,6 +149,7 @@ class QuSecNode:
 
         self.is_running = False
         self._listener_thread: Optional[threading.Thread] = None
+        self.on_message_callback: Optional[Any] = None
 
     def initialize(self) -> bool:
         """Start hardware channels, listener thread, gateway server, and establish session."""
@@ -279,11 +280,13 @@ class QuSecNode:
           transmits optical state frames + 2-bit classical corrections over ESP32 Wi-Fi, and executes Pauli reconstruction.
         - 'otp': Consumes exact bits from KeyPool, encrypts with One-Time-Pad, and signs with Wegman-Carter MAC.
         """
-        if self.key_pool.needs_rekey():
+        msg_bits = string_to_bits(message)
+        if not self.session_mgr.session_id or self.session_mgr.state != SessionState.ESTABLISHED:
+            self.initiate_session()
+        if self.key_pool.needs_rekey() or self.key_pool.available_bits < len(msg_bits):
             self.replenish_key_pool()
 
         msg_id = "msg_" + str(uuid.uuid4())[:8]
-        msg_bits = string_to_bits(message)
         t0 = time.time()
         target_role = recipient.capitalize() if recipient else self.peer_title
 
@@ -466,6 +469,11 @@ class QuSecNode:
 
             self.ui.add_log(f"Received from {sender_name}: \"{text}\" [Teleportation]")
             self.events.emit("message_received", record)
+            if self.on_message_callback:
+                try:
+                    self.on_message_callback(record)
+                except Exception as cb_err:
+                    logger.debug("on_message_callback error: %s", cb_err)
 
             # Reply with delivery ACK
             self.classical_channel.send_classical("MSG_ACK", {"ack_id": msg_id})
@@ -497,6 +505,11 @@ class QuSecNode:
 
             self.ui.add_log(f"Received from {sender_name}: \"{decrypted_text}\" [OTP]")
             self.events.emit("message_received", record)
+            if self.on_message_callback:
+                try:
+                    self.on_message_callback(record)
+                except Exception as cb_err:
+                    logger.debug("on_message_callback error: %s", cb_err)
             self.classical_channel.send_classical("MSG_ACK", {"ack_id": msg_id})
 
         elif p_type == "HANDSHAKE_INIT":
@@ -559,6 +572,68 @@ class QuSecNode:
                 pass
             finally:
                 self.stop()
+
+    def run_interactive_chat(self):
+        """
+        Runs continuous interactive two-way quantum chat directly in the terminal.
+        Starts as soon as users begin messaging and loops continuously until turned off (Ctrl+C or /quit).
+        Concurrent with the web platform gateway so messages from web platform are also received.
+        """
+        self.initialize()
+        console = Console()
+        console.print(f"[bold cyan]╔══════════════════════════════════════════════════════════════════════╗[/bold cyan]")
+        console.print(f"[bold green]║   QuSec Quantum Transport Active · Role: [{self.role_title}]                 ║[/bold green]")
+        console.print(f"[bold cyan]╠══════════════════════════════════════════════════════════════════════╣[/bold cyan]")
+        fibre_tag = "[bold green]OK[/bold green]" if self.quantum_channel.link_ok else "[yellow]SIMULATED[/yellow]"
+        esp_tag = "[bold green]OK[/bold green]" if self.classical_channel.esp32_ok else "[yellow]SIMULATED[/yellow]"
+        console.print(f" • Optical Channel: {fibre_tag} | ESP32 Classical: {esp_tag}")
+        console.print(f" • Peer Target: [bold yellow]{self.peer_title}[/bold yellow] ({self.peer_host})")
+        console.print(f" • Web Platform Gateway: [cyan]http://127.0.0.1:{self.gateway_port}[/cyan]")
+        console.print(f" • Active Key Pool: [bold green]{self.key_pool.available_bits} bits[/bold green]")
+        console.print(f" • Commands: [dim]/status, /rekey, /quit (or press Ctrl+C to turn off)[/dim]")
+        console.print(f"[bold cyan]╚══════════════════════════════════════════════════════════════════════╝[/bold cyan]\n")
+
+        def handle_chat_msg(record):
+            sender = record.get("from", self.peer_title)
+            text = record.get("text", "")
+            mode = record.get("mode", "teleportation")
+            console.print(f"\n[bold magenta]◄ [{sender}]:[/bold magenta] [bold white]{text}[/bold white] [dim]({mode})[/dim]")
+            print(f"[{self.role_title}] > ", end="", flush=True)
+
+        self.on_message_callback = handle_chat_msg
+
+        try:
+            while self.is_running:
+                try:
+                    line = input(f"[{self.role_title}] > ").strip()
+                except EOFError:
+                    break
+
+                if not line:
+                    continue
+
+                if line.lower() in ("/quit", "/exit", "quit", "exit"):
+                    console.print("[yellow]Turning off QuSec quantum transport...[/yellow]")
+                    break
+                elif line.lower() == "/status":
+                    status = self.session_mgr.get_session_summary()
+                    console.print(f"[cyan]Session: {status['session_id']} | Key Pool: {self.key_pool.available_bits} bits | QBER: {status['qber']*100:.2f}% | Fidelity: {status['fidelity']:.2f}[/cyan]")
+                elif line.lower() == "/rekey":
+                    console.print("[yellow]Replenishing entanglement key pool...[/yellow]")
+                    added = self.replenish_key_pool(512)
+                    console.print(f"[green]✔ Added {added} bits. Available: {self.key_pool.available_bits} bits[/green]")
+                elif line.lower() == "/help":
+                    console.print("[dim]Commands: /status (view metrics), /rekey (replenish keys), /quit (turn off)[/dim]")
+                else:
+                    res = self.send_message(self.peer_role, line, mode="teleportation")
+                    qubits = res.get("qubits_teleported", len(line) * 8)
+                    console.print(f"[bold green]► [You → {self.peer_title}]:[/bold green] [white]\"{line}\"[/white] [dim](Teleported: {qubits} qubits | Link: quantum-secure)[/dim]")
+
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupted by user. Turning off...[/yellow]")
+        finally:
+            self.stop()
+            console.print("[bold red]QuSec transport turned off.[/bold red]")
 
     def stop(self):
         """Shutdown node, sockets, and zeroize keys."""
