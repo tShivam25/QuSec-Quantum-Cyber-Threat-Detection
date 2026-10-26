@@ -5,6 +5,8 @@ QuSec Quantum Package: Teleportation, Bell state operations, and Backend integra
 from qusec.quantum.backend import get_backend, execute_circuit
 from qusec.quantum.bell import bell_pair, correct, create_bell_correlator_circuit, compute_pauli_correlator
 from qusec.quantum.teleportation import create_teleportation_circuit, simulate_round
+from qusec.quantum.entanglement import EntanglementEngine
+from qusec.quantum.teleport import QuantumTeleportationEngine
 
 __all__ = [
     "get_backend",
@@ -15,4 +17,6 @@ __all__ = [
     "compute_pauli_correlator",
     "create_teleportation_circuit",
     "simulate_round",
+    "EntanglementEngine",
+    "QuantumTeleportationEngine",
 ]

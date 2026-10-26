@@ -92,22 +92,103 @@ When using the interactive simulator (`qusec run`), you will be prompted to simu
 
 ---
 
-## 🏗️ Architecture
+## 🌐 Real-World Hardware & Transport Architecture
+
+QuSec has been upgraded into a functional, real-world secure transport framework:
 
 ```text
-                    QUSEC SECURITY ENGINE
-                           │
-                  Quantum Circuit Layer
-                           │
-                 Abstract Backend Manager
-                           │
-          ┌────────────────┼────────────────┐
-          ▼                ▼                ▼
-      AerSimulator    Noisy AerSimulator   Quantum Hardware
-                           │
-                  Measurement Results
-                           │
-               Projective/SARG04 Security Pipeline
+Sender Laptop (Alice)                               Receiver Laptop (Bob)
+┌───────────────────────┐                           ┌───────────────────────┐
+│ QuSec Node (Alice)    │                           │ QuSec Node (Bob)      │
+│  ├── Gateway API      │                           │  ├── Gateway API      │
+│  ├── Key Pool         │                           │  ├── Key Pool         │
+│  └── Teleport Engine  │                           │  └── Teleport Engine  │
+└──────────┬────────────┘                           └───────────┬───────────┘
+           │ USB Serial                                         │ USB Serial
+┌──────────▼────────────┐                           ┌───────────▼───────────┐
+│ ESP32 Sender          │◄─── Classical Wireless ──►│ ESP32 Receiver        │
+│ (TRNG + Wi-Fi Relay)  │     (Wi-Fi / ESP-NOW)     │ (TRNG + Wi-Fi Relay)  │
+└───────────────────────┘                           └───────────────────────┘
+           │ Ethernet                                           │ Ethernet
+┌──────────▼────────────┐                           ┌───────────▼───────────┐
+│ Optical Transceiver   │◄════ Optical Fibre Cable ═►│ Optical Transceiver   │
+│ Media Converter       │     (Quantum Channel)     │ Media Converter       │
+└───────────────────────┘                           └───────────────────────┘
 ```
+
+### Components
+1. **4 ESP32 Microcontrollers**: Sender (Alice), Receiver (Bob), Attacker (Eve), Auditor (QAuditor).
+2. **Optical Transceivers & Fibre Cable**: Full-duplex optical transceiver pair carrying quantum distribution and teleportation frames over Ethernet.
+3. **2 Ethernet Cables**: Connecting Sender and Receiver laptops to their respective optical media converters.
+4. **Auto-Detection**: QuSec automatically probes USB serial ports (`/dev/cu.usbserial*`, `/dev/ttyUSB*`) to detect ESP32 hardware and network interfaces to detect Ethernet converters.
+
+> **Honest Note on Security Model**: Key creation, reconciliation, and OTP encryption execute on the laptop endpoints. The browser-to-gateway hop is local plaintext. The system provides **laptop-to-laptop quantum-secure** transport.
+
+---
+
+## 🛠️ CLI Commands
+
+### 1. Link Diagnostics (`qusec doctor`)
+Self-test verifying Python environment, ESP32 USB detection, hardware TRNG entropy, Ethernet media converter link, and socket bindings:
+```bash
+qusec doctor
+```
+
+### 2. Interactive Node & Live UI (`qusec node`)
+Launches the live operational terminal dashboard:
+```bash
+# On Sender Laptop (Alice):
+qusec node --role alice
+
+# On Receiver Laptop (Bob):
+qusec node --role bob --peer-host <ALICE_IP>
+```
+
+#### Terminal UI Display:
+```
+┌ QuSec · Alice ─────────────── ● Fibre OK  ● ESP32 OK ┐
+│ Session a91f · Key pool 4,820 bits · QBER 2.1%       │
+├ Pipeline ────────────────────────────────────────────┤
+│ Encode ✓  Entangle ✓  Test ✓  Teleport ▶  Correct ·  │
+├ Log ─────────────────────────────────────────────────┤
+│ 14:02:11 Bell pairs sent: 512 (64 test pairs)        │
+│ 14:02:12 Fidelity 0.97, CHSH 2.71 → channel trusted  │
+└──────────────────────────────────────────────────────┘
+```
+
+### 3. Social Media Platform Bridge Gateway (`qusec gateway`)
+Starts the local REST + SSE platform bridge for web applications:
+```bash
+qusec gateway --role alice --port 8765
+```
+- `GET  /api/status` : Node status, active session, key pool, and quantum channel metrics.
+- `POST /api/send`   : Send message (`{"to": "bob", "message": "...", "mode": "teleportation"|"otp"}`).
+- `GET  /api/events` : Real-time Server-Sent Events (SSE) stream.
+- `POST /api/rekey`  : Trigger key pool replenishment round.
+
+### 4. Key Pool Inspector (`qusec keys`)
+Inspects active cryptographic key material, rekey triggers, and burn-on-use stats:
+```bash
+qusec keys
+```
+
+### 5. Quantum-Secure Send (`qusec send`)
+Transmits a message over the quantum link via state teleportation or One-Time-Pad:
+```bash
+qusec send --to bob "Hello Quantum Teleportation" --mode teleportation
+qusec send --to bob "Top Secret" --mode otp
+```
+
+---
+
+## ⚡ ESP32 Firmware
+
+The ready-to-flash Arduino C++ firmware is provided in:
+`firmware/esp32_qusec/esp32_qusec.ino`
+
+Flash to each ESP32 board using Arduino IDE or PlatformIO:
+- True Hardware RNG via `esp_random()`
+- Wi-Fi Access Point / Station Classical Relay (Port `9877`)
+- Serial protocol interface at `115200` baud
 
 

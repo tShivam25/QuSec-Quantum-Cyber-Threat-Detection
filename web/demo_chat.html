@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QuSec Quantum Chat · Social Media Bridge</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card: #151d2f;
+      --border: #23304a;
+      --text: #f0f4fc;
+      --text-dim: #7d8ea8;
+      --accent-cyan: #00e5ff;
+      --accent-green: #00e676;
+      --accent-amber: #ffab00;
+      --accent-red: #ff1744;
+      --bubble-sent: #0077b6;
+      --bubble-recv: #1b263b;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+    /* Top Navigation / Status Header */
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-title { font-size: 1.25rem; font-weight: 700; color: #fff; }
+    .role-badge { background: #0288d1; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; }
+
+    .status-group { display: flex; align-items: center; gap: 16px; font-size: 0.85rem; }
+    .indicator { display: flex; align-items: center; gap: 6px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+    .dot.green { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
+    .dot.red { background: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
+    .metric { background: #0d1322; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); }
+    .metric span { color: var(--accent-cyan); font-weight: 600; }
+
+    /* Pipeline Bar */
+    .pipeline-bar {
+      background: #0e1524;
+      border-bottom: 1px solid var(--border);
+      padding: 8px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 0.8rem;
+    }
+    .pipe-step { display: flex; align-items: center; gap: 4px; color: var(--text-dim); }
+    .pipe-step.done { color: var(--accent-green); font-weight: 600; }
+    .pipe-step.active { color: var(--accent-cyan); font-weight: 700; }
+
+    /* Main Chat Layout */
+    .chat-container { flex: 1; display: flex; flex-direction: column; max-width: 860px; width: 100%; margin: 0 auto; padding: 20px; overflow: hidden; }
+    .messages-pane { flex: 1; overflow-y: auto; padding-right: 8px; display: flex; flex-direction: column; gap: 14px; }
+
+    .msg-bubble {
+      max-width: 75%;
+      padding: 12px 16px;
+      border-radius: 14px;
+      position: relative;
+      word-wrap: break-word;
+      line-height: 1.45;
+    }
+    .msg-bubble.outgoing { align-self: flex-end; background: var(--bubble-sent); color: #fff; border-bottom-right-radius: 3px; }
+    .msg-bubble.incoming { align-self: flex-start; background: var(--bubble-recv); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+
+    .msg-meta { font-size: 0.7rem; color: rgba(255,255,255,0.7); margin-top: 4px; display: flex; justify-content: space-between; gap: 12px; }
+    .msg-meta .mode-tag { background: rgba(0,0,0,0.3); padding: 1px 6px; border-radius: 4px; }
+
+    /* Input Dock */
+    .input-dock {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-top: 14px;
+    }
+    .mode-select {
+      background: #0d1322;
+      color: var(--accent-cyan);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.85rem;
+      outline: none;
+    }
+    .text-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #fff;
+      font-size: 0.95rem;
+    }
+    .send-btn {
+      background: var(--accent-cyan);
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      padding: 9px 20px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .send-btn:hover { opacity: 0.85; }
+
+    /* Footer Note */
+    footer {
+      text-align: center;
+      padding: 6px;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      background: #080c14;
+      border-top: 1px solid #141b2b;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <header>
+    <div class="brand">
+      <div class="brand-title">QuSec Social</div>
+      <div id="roleBadge" class="role-badge">Sender</div>
+    </div>
+    <div class="status-group">
+      <div class="indicator"><span id="fibreDot" class="dot green"></span> Fibre</div>
+      <div class="indicator"><span id="espDot" class="dot green"></span> ESP32</div>
+      <div class="metric">Session: <span id="sessionVal">----</span></div>
+      <div class="metric">Key Pool: <span id="keyPoolVal">4,820</span> bits</div>
+      <div class="metric">QBER: <span id="qberVal">1.8%</span></div>
+      <button onclick="initSession()" style="background:#1b263b; color:#00e5ff; border:1px solid #23304a; padding:4px 10px; border-radius:6px; font-size:0.75rem; cursor:pointer;">Init Session</button>
+    </div>
+  </header>
+
+  <!-- Pipeline State -->
+  <div class="pipeline-bar">
+    <span style="color:var(--accent-amber); font-weight:700;">Pipeline:</span>
+    <div class="pipe-step done">Encode ✓</div>
+    <div class="pipe-step done">Entangle ✓</div>
+    <div class="pipe-step done">Test ✓</div>
+    <div class="pipe-step active">Teleport ▶</div>
+    <div class="pipe-step">Correct ·</div>
+  </div>
+
+  <!-- Messages Pane -->
+  <div class="chat-container">
+    <div id="messagesPane" class="messages-pane">
+      <div class="msg-bubble incoming">
+        <div>Quantum secure channel initialized. You can now chat via state teleportation or One-Time-Pad.</div>
+        <div class="msg-meta">
+          <span>System</span>
+          <span class="mode-tag">Secure Link</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input Dock -->
+    <div class="input-dock">
+      <select id="modeSelect" class="mode-select">
+        <option value="teleportation">Quantum Teleportation</option>
+        <option value="otp">One-Time-Pad (OTP)</option>
+      </select>
+      <input type="text" id="msgInput" class="text-input" placeholder="Type a message to transmit over quantum channel..." autofocus onkeydown="if(event.key==='Enter') sendChat();">
+      <button class="send-btn" onclick="sendChat()">Send</button>
+    </div>
+  </div>
+
+  <footer>
+    Honest note: Laptop-to-laptop quantum-secure. Browser-to-gateway hop is local plaintext.
+  </footer>
+
+  <script src="qusec-web-bridge.js"></script>
+  <script>
+    // Detect port from URL parameter or default to 8765
+    const urlParams = new URLSearchParams(window.location.search);
+    const gatewayPort = urlParams.get('port') || 8765;
+    const bridge = new QuSecBridge(`http://127.0.0.1:${gatewayPort}`);
+
+    const roleBadge = document.getElementById("roleBadge");
+    const fibreDot = document.getElementById("fibreDot");
+    const espDot = document.getElementById("espDot");
+    const sessionVal = document.getElementById("sessionVal");
+    const keyPoolVal = document.getElementById("keyPoolVal");
+    const qberVal = document.getElementById("qberVal");
+    const messagesPane = document.getElementById("messagesPane");
+    const msgInput = document.getElementById("msgInput");
+    const modeSelect = document.getElementById("modeSelect");
+
+    bridge.onStatus((s) => {
+      if (s.status === "OFFLINE") {
+        roleBadge.innerText = "OFFLINE";
+        roleBadge.style.background = "#d32f2f";
+        fibreDot.className = "dot red";
+        espDot.className = "dot red";
+        return;
+      }
+
+      roleBadge.innerText = s.role || "Node";
+      roleBadge.style.background = s.role === "Sender" ? "#0288d1" : "#7b1fa2";
+      sessionVal.innerText = s.session_id || "----";
+
+      if (s.channel) {
+        fibreDot.className = s.channel.fibre_ok ? "dot green" : "dot red";
+        espDot.className = s.channel.esp32_ok ? "dot green" : "dot red";
+        qberVal.innerText = (s.channel.qber * 100).toFixed(1) + "%";
+      }
+
+      if (s.key_pool) {
+        keyPoolVal.innerText = s.key_pool.available_bits.toLocaleString();
+      }
+    });
+
+    bridge.onMessage((msg) => {
+      appendBubble(msg.text, "incoming", msg.from || "Peer", msg.mode || "teleportation");
+    });
+
+    async function sendChat() {
+      const text = msgInput.value.trim();
+      if (!text) return;
+
+      const mode = modeSelect.value;
+      msgInput.value = "";
+      appendBubble(text, "outgoing", "You", mode);
+
+      try {
+        await bridge.sendMessage(text, mode);
+      } catch (err) {
+        appendBubble(`Error sending message: ${err.message}`, "incoming", "System", "Error");
+      }
+    }
+
+    async function initSession() {
+      try {
+        const res = await bridge.initSession();
+        alert(`Quantum Session Initialized: ${res.session_id}`);
+      } catch (err) {
+        alert("Failed to initialize session: " + err.message);
+      }
+    }
+
+    function appendBubble(text, direction, author, mode) {
+      const bubble = document.createElement("div");
+      bubble.className = `msg-bubble ${direction}`;
+      bubble.innerHTML = `
+        <div>${escapeHtml(text)}</div>
+        <div class="msg-meta">
+          <span>${author}</span>
+          <span class="mode-tag">${mode.toUpperCase()}</span>
+        </div>
+      `;
+      messagesPane.appendChild(bubble);
+      messagesPane.scrollTop = messagesPane.scrollHeight;
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    bridge.start();
+  </script>
+</body>
+</html>
