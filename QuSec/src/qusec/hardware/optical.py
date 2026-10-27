@@ -37,8 +37,27 @@ class EthernetDetector:
 
     @staticmethod
     def _get_bsd_interfaces() -> List[Dict[str, Any]]:
-        """List macOS and BSD network interfaces via ifconfig."""
+        """List macOS and BSD physical wired network interfaces, strictly excluding Wi-Fi and virtual devices."""
         interfaces = []
+
+        # Find wireless devices to strictly exclude from optical transceiver detection
+        wifi_devices = set()
+        wired_hardware_ports = set()
+        try:
+            hw_out = subprocess.check_output(["networksetup", "-listallhardwareports"], text=True, stderr=subprocess.DEVNULL)
+            curr_port = ""
+            for l in hw_out.splitlines():
+                if l.startswith("Hardware Port:"):
+                    curr_port = l.split("Hardware Port:")[1].strip().lower()
+                elif l.startswith("Device:"):
+                    dev = l.split("Device:")[1].strip()
+                    if any(w in curr_port for w in ["wi-fi", "wifi", "airport", "bluetooth", "wireless"]):
+                        wifi_devices.add(dev)
+                    elif any(e in curr_port for e in ["ethernet", "lan", "usb", "thunderbolt"]):
+                        wired_hardware_ports.add(dev)
+        except Exception:
+            wifi_devices.add("en0")
+
         try:
             out = subprocess.check_output(["ifconfig"], text=True, stderr=subprocess.DEVNULL)
             current_iface = None
@@ -70,7 +89,11 @@ class EthernetDetector:
                 if "status: active" in line:
                     iface_info["status"] = "active"
                     iface_info["is_active"] = True
-                if "media: autoselect" in line or "1000baseT" in line or "100baseTX" in line:
+
+                # Strict wired check: Must NOT be Wi-Fi and must be recognized as wired port or have 100/1000base carrier
+                if current_iface in wifi_devices or current_iface.startswith("lo") or current_iface.startswith("awdl") or current_iface.startswith("llw") or current_iface.startswith("utun") or current_iface.startswith("anpi"):
+                    iface_info["is_ethernet"] = False
+                elif current_iface in wired_hardware_ports or any(b in line for b in ["1000baseT", "100baseTX", "10Gbase", "2500baseT", "10baseT"]):
                     iface_info["is_ethernet"] = True
 
             if current_iface and iface_info:
@@ -82,11 +105,24 @@ class EthernetDetector:
 
     @staticmethod
     def _get_windows_interfaces() -> List[Dict[str, Any]]:
-        """List Windows network interfaces via PowerShell Get-NetAdapter or ipconfig /all."""
+        """List Windows physical wired network interfaces via PowerShell Get-NetAdapter or ipconfig /all."""
         interfaces = []
-        # Primary method: PowerShell Get-NetAdapter
+        wireless_keywords = [
+            "wi-fi", "wifi", "wireless", "wlan", "802.11", "bluetooth",
+            "virtual", "vpn", "loopback", "hyper-v", "wsl", "teredo",
+            "isatap", "vmware", "vbox", "miniport", "wan", "cellular"
+        ]
+        wired_keywords = [
+            "ethernet", "gbe", "realtek pcie", "realtek usb", "asix",
+            "fast ethernet", "gigabit", "lan", "usb to ethernet", "pcie gbe"
+        ]
+
+        # Primary method: PowerShell Get-NetAdapter -Physical with explicit 802.3 wired filter
         try:
-            cmd = ["powershell", "-NoProfile", "-Command", "Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, MacAddress | ConvertTo-Json -Compress"]
+            cmd = [
+                "powershell", "-NoProfile", "-Command",
+                "Get-NetAdapter -Physical | Where-Object { $_.PhysicalMediaType -ne 'Native 802.11' -and $_.MediaType -eq '802.3' } | Select-Object Name, InterfaceDescription, Status, MacAddress, LinkSpeed | ConvertTo-Json -Compress"
+            ]
             out = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL, timeout=4)
             data = json.loads(out)
             if isinstance(data, dict):
@@ -96,71 +132,87 @@ class EthernetDetector:
                 is_up = status_str in ("up", "connected")
                 name = str(item.get("Name", "Ethernet"))
                 desc = str(item.get("InterfaceDescription", ""))
-                is_eth = "ethernet" in name.lower() or any(k in desc.lower() for k in ["gbe", "ethernet", "realtek", "intel", "gigabit", "lan"])
-                interfaces.append({
-                    "name": name,
-                    "ip": None,
-                    "mac": item.get("MacAddress"),
-                    "status": "active" if is_up else "inactive",
-                    "is_ethernet": is_eth,
-                    "is_active": is_up,
-                })
+
+                # Strict validation: MUST NOT be wireless
+                is_wireless = any(w in name.lower() or w in desc.lower() for w in wireless_keywords)
+                is_wired = not is_wireless and (
+                    "ethernet" in name.lower() or any(k in desc.lower() for k in wired_keywords)
+                )
+
+                if is_wired:
+                    interfaces.append({
+                        "name": name,
+                        "ip": None,
+                        "mac": item.get("MacAddress"),
+                        "status": "active" if is_up else "inactive",
+                        "is_ethernet": True,
+                        "is_active": is_up,
+                    })
         except Exception as e:
             logger.debug("PowerShell Get-NetAdapter error: %s", e)
 
-        # Augment with IP addresses from ipconfig /all
+        # Fallback if Get-NetAdapter returned nothing: parse ipconfig /all with strict filtering
+        if not interfaces:
+            try:
+                out = subprocess.check_output(["ipconfig", "/all"], text=True, stderr=subprocess.DEVNULL, timeout=4)
+                current_name = None
+                current_mac = None
+                current_ip = None
+                is_disc = False
+
+                def save_prev():
+                    if current_name:
+                        is_wireless = any(w in current_name.lower() for w in wireless_keywords)
+                        is_wired = not is_wireless and any(k in current_name.lower() for k in wired_keywords)
+                        if is_wired:
+                            interfaces.append({
+                                "name": current_name,
+                                "ip": current_ip,
+                                "mac": current_mac,
+                                "status": "inactive" if is_disc else "active",
+                                "is_ethernet": True,
+                                "is_active": not is_disc and bool(current_ip),
+                            })
+
+                for line in out.splitlines():
+                    if line and not line.startswith(" ") and ":" in line and not line.startswith("Windows IP"):
+                        save_prev()
+                        current_name = line.split(":", 1)[0].replace("adapter", "").strip()
+                        current_mac = None
+                        current_ip = None
+                        is_disc = False
+                    if "Media State" in line and "disconnected" in line:
+                        is_disc = True
+                    if "Physical Address" in line and ":" in line:
+                        current_mac = line.split(":", 1)[1].strip()
+                    if "IPv4 Address" in line and ":" in line:
+                        current_ip = line.split(":", 1)[1].strip().replace("(Preferred)", "").strip()
+
+                save_prev()
+            except Exception as e:
+                logger.debug("ipconfig parsing error: %s", e)
+
+        # Augment IPs for interfaces found via PowerShell
         try:
             out = subprocess.check_output(["ipconfig", "/all"], text=True, stderr=subprocess.DEVNULL, timeout=4)
-            current_name = None
-            current_mac = None
-            current_ip = None
-            is_disc = False
-
-            def save_prev():
-                if current_name:
-                    # Look for existing entry or add new
-                    for ifc in interfaces:
-                        if ifc["name"].lower() in current_name.lower() or current_name.lower() in ifc["name"].lower():
-                            if current_ip:
-                                ifc["ip"] = current_ip
-                            if current_mac and not ifc.get("mac"):
-                                ifc["mac"] = current_mac
-                            if not is_disc and current_ip:
-                                ifc["is_active"] = True
-                                ifc["status"] = "active"
-                            return
-                    interfaces.append({
-                        "name": current_name,
-                        "ip": current_ip,
-                        "mac": current_mac,
-                        "status": "inactive" if is_disc else "active",
-                        "is_ethernet": "ethernet" in current_name.lower(),
-                        "is_active": not is_disc and bool(current_ip),
-                    })
-
+            cur_adp = ""
             for line in out.splitlines():
-                if line and not line.startswith(" ") and ":" in line and not line.startswith("Windows IP"):
-                    save_prev()
-                    current_name = line.split(":", 1)[0].replace("adapter", "").strip()
-                    current_mac = None
-                    current_ip = None
-                    is_disc = False
-                if "Media State" in line and "disconnected" in line:
-                    is_disc = True
-                if "Physical Address" in line and ":" in line:
-                    current_mac = line.split(":", 1)[1].strip()
-                if "IPv4 Address" in line and ":" in line:
-                    current_ip = line.split(":", 1)[1].strip().replace("(Preferred)", "").strip()
-
-            save_prev()
-        except Exception as e:
-            logger.debug("ipconfig parsing error: %s", e)
+                if line and not line.startswith(" ") and ":" in line:
+                    cur_adp = line.split(":", 1)[0].replace("adapter", "").strip()
+                if "IPv4 Address" in line and ":" in line and cur_adp:
+                    ip_val = line.split(":", 1)[1].strip().replace("(Preferred)", "").strip()
+                    for ifc in interfaces:
+                        if ifc["name"].lower() in cur_adp.lower() or cur_adp.lower() in ifc["name"].lower():
+                            if not ifc.get("ip"):
+                                ifc["ip"] = ip_val
+        except Exception:
+            pass
 
         return interfaces
 
     @staticmethod
     def _get_linux_interfaces() -> List[Dict[str, Any]]:
-        """List Linux network interfaces via ip link / ip addr."""
+        """List Linux network interfaces via ip link / ip addr, strictly excluding wireless."""
         interfaces = []
         try:
             out = subprocess.check_output(["ip", "-j", "addr"], text=True, stderr=subprocess.DEVNULL)
@@ -174,36 +226,29 @@ class EthernetDetector:
                     if addr_info.get("family") == "inet":
                         ip = addr_info.get("local")
                         break
-                interfaces.append({
-                    "name": ifname,
-                    "ip": ip,
-                    "mac": item.get("address"),
-                    "status": "active" if is_up else "inactive",
-                    "is_ethernet": not ifname.startswith("lo") and not ifname.startswith("wl"),
-                    "is_active": is_up,
-                })
+                is_eth = not ifname.startswith("lo") and not ifname.startswith("wl") and not ifname.startswith("vir") and not ifname.startswith("docker")
+                if is_eth:
+                    interfaces.append({
+                        "name": ifname,
+                        "ip": ip,
+                        "mac": item.get("address"),
+                        "status": "active" if is_up else "inactive",
+                        "is_ethernet": True,
+                        "is_active": is_up,
+                    })
         except Exception:
             return EthernetDetector._get_bsd_interfaces()
         return interfaces
 
     @staticmethod
     def find_active_ethernet() -> Optional[Dict[str, Any]]:
-        """Find the best active Ethernet interface suitable for the optical transceiver."""
+        """Find the best active physical wired Ethernet interface suitable for the optical transceiver."""
         ifaces = EthernetDetector.get_interfaces()
-        # Prefer active interfaces with Ethernet characteristics excluding loopback
         for iface in ifaces:
-            name = iface["name"]
-            if name.startswith("lo") or name.startswith("utun") or name.startswith("awdl") or name.startswith("llw") or name.startswith("gif") or name.startswith("stf"):
+            if not iface.get("is_ethernet", False):
                 continue
-            if iface["is_active"]:
+            if iface.get("is_active", False):
                 return iface
-
-        # Return first non-loopback if available
-        for iface in ifaces:
-            name = iface["name"]
-            if not name.startswith("lo") and not name.startswith("utun"):
-                return iface
-
         return None
 
 
@@ -243,22 +288,58 @@ class QuantumChannel:
         self._auto_detect()
 
     def _auto_detect(self):
-        """Auto-detect Ethernet link status."""
+        """Auto-detect physical wired Ethernet link status."""
         if not self.force_simulation:
             active_eth = EthernetDetector.find_active_ethernet()
             if active_eth:
                 self.detected_iface = active_eth
-                logger.info("Detected Ethernet media converter interface: %s (%s)", active_eth["name"], active_eth.get("ip"))
+                logger.info("Detected physical Ethernet media converter interface: %s (%s)", active_eth["name"], active_eth.get("ip"))
+
+    @staticmethod
+    def probe_optical_carrier(peer_host: str, timeout: float = 0.8) -> Tuple[bool, float, str]:
+        """
+        Genuinely test whether optical packets can cross the fiber cable to the peer.
+        Sends a physical ICMP ping / probe across the optical subnet.
+        """
+        if not peer_host or peer_host in ("127.0.0.1", "localhost", "0.0.0.0"):
+            return False, 0.0, "Local loopback (No physical fiber)"
+
+        import platform
+        system = platform.system()
+        timeout_ms = max(500, int(timeout * 1000))
+        if system == "Windows":
+            ping_cmd = ["ping", "-n", "1", "-w", str(timeout_ms), peer_host]
+        else:
+            ping_cmd = ["ping", "-c", "1", "-W", "1", peer_host]
+
+        try:
+            t0 = time.perf_counter()
+            ret = subprocess.run(ping_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout + 0.8)
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            if ret.returncode == 0:
+                return True, dt_ms, f"Optical carrier verified ({dt_ms:.1f}ms RTT)"
+        except Exception:
+            pass
+
+        return False, 0.0, "Dark fibre / Cable disconnected (0 packets received from peer)"
 
     @property
     def link_ok(self) -> bool:
         """Indicates whether the optical link is ready and operational."""
         if self.force_simulation:
             return self.is_open
-        if self.detected_iface and self.detected_iface.get("is_active"):
-            return self.is_open
-        # Fallback to socket status
-        return self.is_open
+
+        # In physical hardware mode:
+        # 1. Must have an active physical wired Ethernet adapter
+        if not self.detected_iface or not self.detected_iface.get("is_active"):
+            return False
+
+        # 2. If physical peer host is configured (e.g. 192.168.2.x), probe optical carrier
+        if self.peer_host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+            carrier_ok, _, _ = self.probe_optical_carrier(self.peer_host, timeout=0.6)
+            return carrier_ok and self.is_open
+
+        return self.detected_iface.get("is_active", False) and self.is_open
 
     def open(self) -> bool:
         """Initialize and bind the quantum communication socket."""

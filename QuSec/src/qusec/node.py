@@ -139,6 +139,7 @@ class QuSecNode:
         self.received_messages: List[Dict[str, Any]] = []
         self.sent_messages: List[Dict[str, Any]] = []
         self._seen_msg_ids = set()
+        self._received_optical_bursts: Dict[str, Dict[str, Any]] = {}
 
         # Gateway Context & Server
         self.gateway_ctx = GatewayContext(
@@ -154,6 +155,7 @@ class QuSecNode:
 
         self.is_running = False
         self._listener_thread: Optional[threading.Thread] = None
+        self._watchdog_thread: Optional[threading.Thread] = None
         self.on_message_callback: Optional[Any] = None
         self.threshold_engine = ThresholdEngine(sa=0.05, sv=0.15, q_threshold=0.06)
         self.active_attack: Optional[str] = None
@@ -164,6 +166,47 @@ class QuSecNode:
             self.esp32.set_alarm(enable=enable, blink_ms=150)
         self.gateway_ctx.hardware_state["alarm_active"] = enable
         self.events.emit("threat_alarm", {"active": enable})
+
+    def _optical_carrier_watchdog_loop(self):
+        """
+        Background watchdog monitoring the physical optical fiber link carrier in real time.
+        If the physical optical fiber cable is unplugged, updates link state to disconnected,
+        updates the terminal dashboard, and emits SSE/WebSocket events to the web gateway.
+        """
+        last_state: Optional[bool] = None
+        while self.is_running:
+            try:
+                fibre_ok = self.quantum_channel.link_ok
+                esp32_ok = self.classical_channel.esp32_ok
+
+                # Update states if changed
+                if last_state is None or fibre_ok != last_state:
+                    last_state = fibre_ok
+                    self.ui.set_hardware_status(
+                        fibre_ok=fibre_ok,
+                        esp32_ok=esp32_ok,
+                        is_simulation=self.force_simulation,
+                    )
+                    self.gateway_ctx.hardware_state["fibre_ok"] = fibre_ok
+                    self.gateway_ctx.hardware_state["esp32_ok"] = esp32_ok
+                    self.events.emit("hardware_status", {
+                        "fibre_ok": fibre_ok,
+                        "esp32_ok": esp32_ok,
+                        "is_simulation": self.force_simulation,
+                    })
+                    if not fibre_ok and not self.force_simulation:
+                        self.ui.add_log("[bold red]▲ Optical Fibre disconnected! Carrier signal lost.[/bold red]")
+                    elif fibre_ok and not self.force_simulation and last_state is not None:
+                        self.ui.add_log("[bold green]● Optical Fibre link carrier detected! Link online.[/bold green]")
+
+            except Exception as e:
+                logger.debug("Carrier watchdog exception: %s", e)
+
+            # Sleep 1.2s between link carrier checks
+            for _ in range(12):
+                if not self.is_running:
+                    break
+                time.sleep(0.1)
 
     def initialize(self) -> bool:
         """Start hardware channels, listener thread, gateway server, and establish session."""
@@ -185,6 +228,10 @@ class QuSecNode:
         # Start background listener thread for two-way chat packets
         self._listener_thread = threading.Thread(target=self._channel_listener_loop, daemon=True)
         self._listener_thread.start()
+
+        # Start background watchdog thread for real-time optical carrier monitoring
+        self._watchdog_thread = threading.Thread(target=self._optical_carrier_watchdog_loop, daemon=True)
+        self._watchdog_thread.start()
 
         # Session setup
         self.initiate_session()
@@ -354,13 +401,14 @@ class QuSecNode:
 
             total_qubits = len(c0_bits)
 
-            # Send optical quantum frame across fibre
+            # Send optical quantum frame across fibre (qubit states travel strictly over optical fiber)
             optical_payload = {
                 "msg_id": msg_id,
                 "qubit_count": total_qubits,
                 "data_qubits": len(msg_bits),
                 "test_qubits": num_test,
                 "basis": "Z",
+                "bob_qubits": bob_qubits,
             }
             self.quantum_channel.send_quantum_frame("TELEPORT_QUANTUM_BURST", optical_payload)
 
@@ -372,7 +420,6 @@ class QuSecNode:
                 "text": message,
                 "c0_bits": c0_bits,
                 "c1_bits": c1_bits,
-                "bob_qubits": bob_qubits,
                 "data_bit_count": len(msg_bits),
                 "test_indices": test_indices,
                 "test_values": test_values,
@@ -481,18 +528,24 @@ class QuSecNode:
         """
         while self.is_running:
             try:
-                # 1. Listen for incoming classical messages
-                c_pkt = self.classical_channel.receive_classical(timeout=0.2)
+                # 1. Listen for optical quantum frames across fibre
+                q_pkt = self.quantum_channel.receive_quantum_frame(timeout=0.04)
+                if q_pkt:
+                    p_type = q_pkt.get("type")
+                    if p_type == "TELEPORT_QUANTUM_BURST":
+                        payload = q_pkt.get("payload", {})
+                        mid = payload.get("msg_id")
+                        if mid:
+                            self._received_optical_bursts[mid] = payload
+                            logger.debug("Received optical quantum burst for msg_id=%s (%d qubits)", mid, payload.get("qubit_count", 0))
+
+                # 2. Listen for incoming classical messages
+                c_pkt = self.classical_channel.receive_classical(timeout=0.08)
                 if c_pkt:
                     self._handle_incoming_classical_packet(c_pkt)
-
-                # 2. Listen for optical quantum frames
-                q_pkt = self.quantum_channel.receive_quantum_frame(timeout=0.1)
-                if q_pkt:
-                    logger.debug("Received optical frame: %s", q_pkt.get("type"))
             except Exception as e:
                 logger.debug("Listener loop exception: %s", e)
-                time.sleep(0.1)
+                time.sleep(0.04)
 
     def render_quantum_security_report(
         self,
@@ -580,8 +633,29 @@ class QuSecNode:
             decoy_types = payload.get("decoy_types", [])
             attack_meta = payload.get("attack")
 
+            # Verify optical quantum burst arrival across physical fiber
+            optical_burst = self._received_optical_bursts.pop(msg_id, None)
+            if not optical_burst:
+                # In transit or slight timing gap: poll for up to 0.4s for optical burst
+                t_end = time.time() + 0.4
+                while time.time() < t_end and not optical_burst:
+                    q_pkt = self.quantum_channel.receive_quantum_frame(timeout=0.05)
+                    if q_pkt and q_pkt.get("type") == "TELEPORT_QUANTUM_BURST":
+                        p = q_pkt.get("payload", {})
+                        if p.get("msg_id") == msg_id:
+                            optical_burst = p
+                            break
+                    time.sleep(0.02)
+
+            optical_missing = (optical_burst is None)
+            if optical_missing:
+                # Genuine physical optical disconnect:
+                # Classical packet arrived over Wi-Fi / Serial, but NO PHOTONS arrived over optical fiber!
+                bob_qubits = [0] * len(c0_bits)
+            else:
+                bob_qubits = optical_burst.get("bob_qubits") or payload.get("bob_qubits", [])
+
             # 1. Pauli Corrections: Apply Pauli X if c1=1, Pauli Z if c0=1
-            bob_qubits = payload.get("bob_qubits", [])
             pauli_x_count = sum(1 for c1 in c1_bits if c1 == 1)
             pauli_z_count = sum(1 for c0 in c0_bits if c0 == 1)
             recovered_bits = bob_qubits if bob_qubits else [0 if (c0 ^ c1) == 0 else 1 for c0, c1 in zip(c0_bits, c1_bits)]
@@ -604,7 +678,12 @@ class QuSecNode:
                         if rec_val != exp_val:
                             detected_errors += 1
 
-            if conclusive_mu > 0:
+            if optical_missing:
+                # Fiber disconnected -> 100% loss / error
+                calc_qber = 1.0
+                detected_errors = conclusive_mu if conclusive_mu > 0 else 16
+                conclusive_mu = max(conclusive_mu, 16)
+            elif conclusive_mu > 0:
                 calc_qber = detected_errors / conclusive_mu
             else:
                 calc_qber = 0.0
@@ -627,7 +706,14 @@ class QuSecNode:
             threat_detected = False
             threat_type = None
 
-            if calc_qber > threshold:
+            if optical_missing:
+                threat_detected = True
+                threat_type = "Optical Fibre Disconnected (Dark Cable - 0 Photons Received)"
+                decision = "REJECTED (OPTICAL FIBRE DISCONNECTED)"
+                # Set optical status to False in gateway and UI
+                self.gateway_ctx.hardware_state["fibre_ok"] = False
+                self.ui.set_hardware_status(fibre_ok=False, esp32_ok=self.classical_channel.esp32_ok, is_simulation=self.force_simulation)
+            elif calc_qber > threshold:
                 threat_detected = True
                 threat_type = "Quantum Channel Tampering / Intercept-Resend"
                 decision = "REJECTED (QBER THRESHOLD EXCEEDED)"

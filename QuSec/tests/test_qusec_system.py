@@ -315,3 +315,49 @@ def test_cli_subcommands():
     assert res_run.returncode == 0
     data = json.loads(res_run.stdout)
     assert data["decision"] == "VERIFIED"
+
+
+def test_optical_fibre_disconnect_rejection():
+    """Verify that if optical fiber is disconnected (no optical burst arriving), teleportation is REJECTED."""
+    sender = QuSecNode(
+        role="sender",
+        peer_host="127.0.0.1",
+        optical_port=19920,
+        classical_port=19921,
+        peer_optical_port=19922,
+        peer_classical_port=19923,
+        gateway_port=18785,
+        force_simulation=True,
+    )
+    receiver = QuSecNode(
+        role="receiver",
+        peer_host="127.0.0.1",
+        optical_port=19922,
+        classical_port=19923,
+        peer_optical_port=19920,
+        peer_classical_port=19921,
+        gateway_port=18786,
+        force_simulation=True,
+    )
+    assert sender.initialize() is True
+    assert receiver.initialize() is True
+    time.sleep(0.3)
+
+    # Disconnect optical channel on sender (simulating fiber unplugged)
+    sender.quantum_channel.peer_port = 19999
+
+    res = sender.send_message(recipient="receiver", message="Secret Photons", mode="teleportation")
+    assert res["success"] is True
+
+    # Allow receiver listener thread to process timeout & detect dark fiber
+    time.sleep(0.6)
+
+    assert len(receiver.received_messages) >= 1
+    last_msg = receiver.received_messages[-1]
+    assert last_msg["threat"] is True
+    assert "REJECTED" in last_msg["decision"]
+    assert "OPTICAL FIBRE DISCONNECTED" in last_msg["decision"]
+    assert receiver.gateway_ctx.hardware_state["fibre_ok"] is False
+
+    sender.stop()
+    receiver.stop()

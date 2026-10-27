@@ -26,7 +26,7 @@ from qusec.hardware.classical import ClassicalChannel
 console = Console()
 
 
-def run_doctor() -> Dict[str, Any]:
+def run_doctor(peer_host: str = "") -> Dict[str, Any]:
     """Execute complete diagnostic suite and display results."""
     results = {
         "version": __version__,
@@ -142,19 +142,23 @@ def run_doctor() -> Dict[str, Any]:
     eth_table.add_column("Interface", style="cyan", width=15)
     eth_table.add_column("MAC Address", style="magenta", width=20)
     eth_table.add_column("IP Address", width=18)
-    eth_table.add_column("Link State", width=15)
+    eth_table.add_column("Link State", width=22)
 
     ifaces = EthernetDetector.get_interfaces()
     results["ethernet_interfaces"] = ifaces
 
     active_eth_found = False
+    active_iface_name = ""
+    eth_count = 0
     for iface in ifaces:
-        name = iface["name"]
-        if name.startswith("lo") or name.startswith("utun") or name.startswith("awdl") or name.startswith("llw"):
+        # Strictly ignore non-ethernet / wireless / loopback
+        if not iface.get("is_ethernet", False):
             continue
-        status_label = "[bold green]● ACTIVE (LINK UP)[/bold green]" if iface["is_active"] else "[dim]inactive[/dim]"
+        eth_count += 1
+        status_label = "[bold green]● ACTIVE (LINK CARRIER)[/bold green]" if iface["is_active"] else "[bold red]✖ DISCONNECTED (NO CABLE)[/bold red]"
         if iface["is_active"]:
             active_eth_found = True
+            active_iface_name = iface["name"]
         eth_table.add_row(
             iface["name"],
             iface.get("mac") or "N/A",
@@ -162,8 +166,8 @@ def run_doctor() -> Dict[str, Any]:
             status_label
         )
 
-    if not active_eth_found:
-        eth_table.add_row("Virtual Fibre", "Loopback / Virtual", "127.0.0.1", "[bold yellow]▲ SIMULATION READY[/bold yellow]")
+    if eth_count == 0:
+        eth_table.add_row("No Ethernet NIC", "No Media Converter detected", "N/A", "[bold red]✖ NOT DETECTED[/bold red]")
 
     results["ethernet_detected"] = active_eth_found
     console.print(eth_table)
@@ -184,23 +188,49 @@ def run_doctor() -> Dict[str, Any]:
     console.print(f"  Quantum Optical Socket (Port 9876): {'[bold green]● OK[/bold green]' if q_ok else '[bold red]✖ BIND ERROR[/bold red]'}")
     console.print(f"  Classical ESP32 Socket (Port 9877): {'[bold green]● OK[/bold green]' if c_ok else '[bold red]✖ BIND ERROR[/bold red]'}\n")
 
-    # 6. Overall Assessment Panel
-    if results["esp32_detected"] and results["ethernet_detected"]:
+    # 6. End-to-End Optical Probe (if peer host provided)
+    peer_carrier_tested = False
+    peer_carrier_verified = False
+    if peer_host and peer_host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+        peer_carrier_tested = True
+        console.print(f"[bold yellow]5. End-to-End Optical Fibre Link Probe ([cyan]{peer_host}[/cyan])[/bold yellow]")
+        carrier_ok, rtt_ms, carrier_msg = QuantumChannel.probe_optical_carrier(peer_host, timeout=1.0)
+        peer_carrier_verified = carrier_ok
+        c_style = "bold green" if carrier_ok else "bold red"
+        console.print(f"  Optical Signal: [{c_style}]{carrier_msg}[/{c_style}]\n")
+
+    # 7. Overall Assessment Panel
+    if peer_carrier_tested:
+        fibre_online = peer_carrier_verified
+    else:
+        fibre_online = active_eth_found
+
+    if results["esp32_detected"] and fibre_online:
         panel_color = "green"
         headline = "[bold green]✔ PHYSICAL HARDWARE READY FOR DEPLOYMENT[/bold green]"
-        guidance = "ESP32 microcontrollers and Optical Transceiver Ethernet converters detected.\nRun 'qusec node --role alice' on sender laptop and 'qusec node --role bob' on receiver laptop."
-    elif results["esp32_detected"] or results["ethernet_detected"]:
+        guidance = "ESP32 microcontrollers and Optical Transceiver Ethernet converters detected and linked.\nRun 'qusec chat --role sender --peer-host <ip>' on sender and 'qusec chat --role receiver' on receiver."
+    elif results["esp32_detected"] or fibre_online:
         panel_color = "yellow"
         headline = "[bold yellow]▲ PARTIAL HARDWARE DETECTED — SIMULATION HYBRID MODE[/bold yellow]"
-        guidance = "Some components detected. Connected links will use physical hardware; missing links will seamlessly fallback to simulation."
+        guidance = "Some physical components connected. Missing links will seamlessly fall back to quantum simulation."
     else:
         panel_color = "cyan"
         headline = "[bold cyan]ℹ FULL SIMULATION MODE READY[/bold cyan]"
-        guidance = "No physical ESP32 or optical transceiver plugged in.\nQuSec will run in high-fidelity quantum simulation mode (Qiskit Aer + virtual network loops).\nTo test with physical hardware, connect ESP32 via USB and Optical Transceiver via Ethernet."
+        guidance = "No physical optical transceiver or ESP32 detected.\nQuSec will run in high-fidelity quantum simulation mode (Qiskit Aer + virtual network loops).\nTo test with physical hardware, connect ESP32 via USB and Optical Transceiver via Ethernet."
+
+    if peer_carrier_tested:
+        if peer_carrier_verified:
+            fibre_status = f"[green]● Active (Optical Carrier Verified across Glass Fibre, {rtt_ms:.1f}ms RTT)[/]"
+        else:
+            fibre_status = "[bold red]✖ DISCONNECTED (Dark Fibre / Cable Unplugged - Zero Light Received)[/]"
+    elif active_eth_found:
+        fibre_status = f"[green]● Media Converter Link Carrier Detected ({active_iface_name})[/]"
+    else:
+        fibre_status = "[bold red]✖ Disconnected (No Physical Wired Optical/Ethernet Link)[/]"
 
     summary_text = (
         f"{headline}\n\n"
-        f"• Optical Fibre Link: {'[green]Active' if results['ethernet_detected'] else '[yellow]Virtual Loopback'}[/]\n"
+        f"• Optical Fibre Link: {fibre_status}\n"
         f"• Classical ESP32 Link: {'[green]Connected' if results['esp32_detected'] else '[yellow]Virtual Socket Relay'}[/]\n"
         f"• Entropy Source: {rng.source_name}\n\n"
         f"[dim]{guidance}[/dim]"

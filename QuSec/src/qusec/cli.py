@@ -219,7 +219,8 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     # 1. qusec doctor
-    subparsers.add_parser("doctor", help="Run hardware detection and diagnostics self-test")
+    doctor_parser = subparsers.add_parser("doctor", help="Run hardware detection and diagnostics self-test")
+    doctor_parser.add_argument("--peer-host", default="", help="Optional peer optical IP to probe end-to-end fiber carrier (e.g. 192.168.2.2)")
 
     # 2. qusec node
     node_parser = subparsers.add_parser("node", help="Run interactive QuSec node with live terminal UI")
@@ -290,7 +291,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "doctor":
-        run_doctor()
+        run_doctor(peer_host=getattr(args, "peer_host", ""))
         return 0
 
     if args.command == "node":
