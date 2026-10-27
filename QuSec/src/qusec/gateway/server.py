@@ -79,7 +79,8 @@ def make_gateway_handler(context: GatewayContext):
         def _send_cors_headers(self):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Access-Control-Request-Private-Network")
+            self.send_header("Access-Control-Allow-Private-Network", "true")
 
         def _send_json_response(self, status_code: int, data: Dict[str, Any]):
             body = json.dumps(data, indent=2).encode("utf-8")
