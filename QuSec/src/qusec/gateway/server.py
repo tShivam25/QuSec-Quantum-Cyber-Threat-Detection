@@ -5,6 +5,7 @@ and external client applications to transmit messages, check key pools,
 and observe real-time quantum pipeline events.
 """
 
+import os
 import json
 import time
 import socket
@@ -19,6 +20,22 @@ from qusec.session.key_pool import KeyPool
 from qusec.session.manager import SessionManager
 
 logger = logging.getLogger("qusec.gateway.server")
+
+
+def _find_web_file(filename: str) -> Optional[str]:
+    """Locate web asset file in package or project folders."""
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "..", "web", filename),
+        os.path.join(os.path.dirname(__file__), "web", filename),
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "web", filename),
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "QuSec", "web", filename),
+        os.path.join(os.getcwd(), "QuSec", "web", filename),
+        os.path.join(os.getcwd(), "web", filename),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return os.path.abspath(c)
+    return None
 
 
 class GatewayContext:
@@ -144,6 +161,34 @@ def make_gateway_handler(context: GatewayContext):
                             self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+
+            elif path in ("/", "/chat", "/demo_chat.html"):
+                html_path = _find_web_file("demo_chat.html")
+                if html_path and os.path.exists(html_path):
+                    with open(html_path, "rb") as f:
+                        body = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self._send_cors_headers()
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self._send_json_response(404, {"error": "demo_chat.html not found"})
+
+            elif path.endswith("qusec-web-bridge.js"):
+                js_path = _find_web_file("qusec-web-bridge.js")
+                if js_path and os.path.exists(js_path):
+                    with open(js_path, "rb") as f:
+                        body = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self._send_cors_headers()
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self._send_json_response(404, {"error": "qusec-web-bridge.js not found"})
 
             else:
                 self._send_json_response(404, {"error": "Not found", "path": path})

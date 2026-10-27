@@ -154,18 +154,27 @@ def cmd_gateway(args):
     role = getattr(args, "role", "sender")
     force_sim = getattr(args, "sim", False)
     gateway_port = getattr(args, "port", 8765)
+    peer_host = getattr(args, "peer_host", "127.0.0.1")
+    esp32_port = getattr(args, "esp32_port", None)
 
     console.print(f"[bold cyan]Starting QuSec Platform Bridge Gateway on http://0.0.0.0:{gateway_port}...[/bold cyan]")
-    node = QuSecNode(role=role, gateway_port=gateway_port, force_simulation=force_sim)
+    node = QuSecNode(
+        role=role,
+        peer_host=peer_host,
+        gateway_port=gateway_port,
+        esp32_port=esp32_port,
+        force_simulation=force_sim,
+    )
     node.initialize()
     role_title = "Sender" if role.lower() in ("alice", "sender") else "Receiver"
     console.print(f"[bold green]✔ QuSec Gateway is ready for social media platform integration ({role_title}).[/bold green]")
     console.print(f"  Endpoints:")
-    console.print(f"  • Status:  GET  http://127.0.0.1:{gateway_port}/api/status")
-    console.print(f"  • Send:    POST http://127.0.0.1:{gateway_port}/api/send")
-    console.print(f"  • Events:  GET  http://127.0.0.1:{gateway_port}/api/events (SSE stream)")
-    console.print(f"  • Init:    POST http://127.0.0.1:{gateway_port}/api/session/init")
-    console.print(f"  • Rekey:   POST http://127.0.0.1:{gateway_port}/api/rekey")
+    console.print(f"  • Web Chat UI:  http://127.0.0.1:{gateway_port}/")
+    console.print(f"  • Status:       GET  http://127.0.0.1:{gateway_port}/api/status")
+    console.print(f"  • Send:         POST http://127.0.0.1:{gateway_port}/api/send")
+    console.print(f"  • Events:       GET  http://127.0.0.1:{gateway_port}/api/events (SSE stream)")
+    console.print(f"  • Init:         POST http://127.0.0.1:{gateway_port}/api/session/init")
+    console.print(f"  • Rekey:        POST http://127.0.0.1:{gateway_port}/api/rekey")
     console.print(f"\n[dim]Press Ctrl+C to terminate gateway.[/dim]")
 
     try:
@@ -237,7 +246,9 @@ def main():
     # 4. qusec gateway
     gateway_parser = subparsers.add_parser("gateway", help="Run platform bridge API gateway")
     gateway_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob"], default="sender", help="Node role (default: sender)")
+    gateway_parser.add_argument("--peer-host", default="127.0.0.1", help="Peer IP address (default: 127.0.0.1)")
     gateway_parser.add_argument("--port", type=int, default=8765, help="Gateway HTTP port (default: 8765)")
+    gateway_parser.add_argument("--esp32-port", default=None, help="ESP32 serial port")
     gateway_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
 
     # 4. qusec keys
