@@ -16,8 +16,9 @@ class QuantumTeleportationEngine:
     and Bob (Receiver) using distributed Bell pairs and ESP32 2-bit classical signaling.
     """
 
-    def __init__(self, backend_type: str = "simulator"):
+    def __init__(self, backend_type: str = "simulator", credentials: Optional[Dict[str, Any]] = None):
         self.backend_type = backend_type
+        self.credentials = credentials
 
     def prepare_and_measure_bsm(
         self,
@@ -53,7 +54,7 @@ class QuantumTeleportationEngine:
         qc.measure(0, 0)
         qc.measure(1, 1)
 
-        counts = execute_circuit(qc, backend_type=self.backend_type, shots=1)
+        counts = execute_circuit(qc, backend_type=self.backend_type, credentials=self.credentials, shots=1)
         res = list(counts.keys())[0].replace(" ", "")
         # Qiskit registers: c2 c1 c0
         c1 = int(res[-2])
@@ -121,7 +122,7 @@ class QuantumTeleportationEngine:
             qc.h(2)
         qc.measure(2, 2)
 
-        counts = execute_circuit(qc, backend_type=self.backend_type, shots=1)
+        counts = execute_circuit(qc, backend_type=self.backend_type, credentials=self.credentials, shots=1)
         res_str = list(counts.keys())[0].replace(" ", "")
 
         # Bits: c2 c1 c0

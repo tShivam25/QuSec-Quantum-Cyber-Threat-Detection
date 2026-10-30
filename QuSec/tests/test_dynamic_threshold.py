@@ -110,11 +110,11 @@ def test_three_execution_backends():
 
     # 2. Labels
     label_sim = get_backend_label("1")
-    assert "AerSimulator" in label_sim
+    assert "Aersim" in label_sim or "AerSim" in label_sim or "AerSimulator" in label_sim
     assert "Ideal" in label_sim
 
     label_noisy = get_backend_label("2")
-    assert "Noisy AerSimulator" in label_noisy
+    assert "Noisy AerSim" in label_noisy or "Noisy AerSimulator" in label_noisy
 
     label_hw = get_backend_label("3")
     assert "Quantum Hardware" in label_hw

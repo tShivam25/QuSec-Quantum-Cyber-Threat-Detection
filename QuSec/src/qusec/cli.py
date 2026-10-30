@@ -19,6 +19,7 @@ from typing import Optional
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
+from rich.prompt import Prompt
 from rich import box
 
 from qusec import __version__
@@ -26,7 +27,7 @@ from qusec.ui.banner import print_banner
 from qusec.ui.monitor import InteractiveSimulator
 from qusec.hardware.doctor import run_doctor
 from qusec.node import QuSecNode
-from qusec.quantum.backend import normalize_backend_type, get_backend_label
+from qusec.quantum.backend import normalize_backend_type, get_backend_label, prompt_backend_selection
 
 console = Console()
 
@@ -137,14 +138,46 @@ def cmd_send(args):
 
 
 def _resolve_peer_config(args):
-    """Resolve role and ports based on --role and --peer arguments for dual-node setups."""
-    role = getattr(args, "role", "dual")
+    """Resolve role, ports, backend, and credentials for dual-node setups."""
+    role = getattr(args, "role", None)
     peer = getattr(args, "peer", None)
     gateway_port = getattr(args, "port", None) or getattr(args, "gateway_port", None)
     optical_port = getattr(args, "optical_port", None)
     classical_port = getattr(args, "classical_port", None)
     peer_optical_port = getattr(args, "peer_optical_port", None)
     peer_classical_port = getattr(args, "peer_classical_port", None)
+
+    # 1. Quantum Execution Backend Resolution:
+    # If not explicitly specified on CLI and running interactively, prompt user with 3 options:
+    # 1. Aersim, 2. Noisy AerSim, 3. Quantum Hardware
+    backend_explicit = any(arg.startswith("--backend") for arg in sys.argv)
+    credentials = None
+    if not backend_explicit and sys.stdin.isatty():
+        backend_type, credentials = prompt_backend_selection(console=console)
+    else:
+        backend_type = getattr(args, "backend", "aer")
+
+    # 2. Node Role Resolution:
+    role_explicit = any(arg.startswith(("--role", "--peer")) for arg in sys.argv)
+    if not role_explicit and not peer and (not role or role == "dual") and sys.stdin.isatty():
+        panel_text = (
+            "[bold cyan]Select Node Role for Two-Way Dual-Mode Communication:[/bold cyan]\n\n"
+            "  [bold green][1] Peer A[/bold green] (Alice · Default Sender · Gateway: 8765 · Ports: 9876, 9877)\n"
+            "  [bold yellow][2] Peer B[/bold yellow] (Bob   · Default Receiver · Gateway: 8766 · Ports: 9878, 9879)"
+        )
+        console.print(Panel(panel_text, title="[bold white]🌐 QUSEC NODE ROLE SELECTION[/bold white]", border_style="cyan", box=box.ROUNDED))
+        role_choice = Prompt.ask(
+            "[bold cyan]Select node role [1/2][/bold cyan]",
+            choices=["1", "2", "a", "b", "peer_a", "peer_b", "alice", "bob"],
+            default="1",
+            console=console,
+        )
+        if role_choice.strip().lower() in ("2", "b", "peer_b", "bob"):
+            role = "peer_b"
+        else:
+            role = "peer_a"
+    elif not role:
+        role = "dual"
 
     p_str = str(peer).strip().lower() if peer else ""
     r_str = str(role).strip().lower() if role else ""
@@ -171,23 +204,23 @@ def _resolve_peer_config(args):
         peer_optical_port = peer_optical_port or 9878
         peer_classical_port = peer_classical_port or 9879
 
-    backend_type = getattr(args, "backend", "aer")
     ibm_token = getattr(args, "ibm_token", None)
     if ibm_token:
         os.environ["IBM_QUANTUM_TOKEN"] = ibm_token
 
-    return role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type
+    return role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type, credentials
 
 
 def cmd_node(args):
-    """Handle 'qusec node' command."""
-    role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type = _resolve_peer_config(args)
+    """Handle 'qusec node' command - continuous interactive two-way quantum communication."""
+    role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type, credentials = _resolve_peer_config(args)
     force_sim = getattr(args, "sim", False)
     duration = getattr(args, "duration", None)
     esp32_port = getattr(args, "esp32_port", None)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
     verbose = getattr(args, "verbose", False)
     batch_size = getattr(args, "correction_batch_size", None)
+    is_monitor = getattr(args, "monitor", False) or getattr(args, "no_prompt", False)
 
     node = QuSecNode(
         role=role,
@@ -202,14 +235,18 @@ def cmd_node(args):
         backend_type=backend_type,
         verbose=verbose,
         correction_batch_size=batch_size,
+        credentials=credentials,
     )
-    node.run_live(duration_seconds=duration)
+    if is_monitor:
+        node.run_transmission_monitor(duration_seconds=duration)
+    else:
+        node.run_interactive_chat()
     return 0
 
 
 def cmd_gateway(args):
     """Handle 'qusec gateway' and 'qusec bridge' command - Live Transmission Monitor."""
-    role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type = _resolve_peer_config(args)
+    role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type, credentials = _resolve_peer_config(args)
     force_sim = getattr(args, "sim", False)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
     esp32_port = getattr(args, "esp32_port", None)
@@ -229,14 +266,15 @@ def cmd_gateway(args):
         backend_type=backend_type,
         verbose=verbose,
         correction_batch_size=batch_size,
+        credentials=credentials,
     )
     node.run_transmission_monitor()
     return 0
 
 
 def cmd_chat(args):
-    """Handle 'qusec chat' command - continuous interactive quantum chat or transmission monitor."""
-    role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type = _resolve_peer_config(args)
+    """Handle 'qusec chat' command - continuous interactive two-way quantum chat."""
+    role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type, credentials = _resolve_peer_config(args)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
     force_sim = getattr(args, "sim", False)
     esp32_port = getattr(args, "esp32_port", None)
@@ -257,6 +295,7 @@ def cmd_chat(args):
         backend_type=backend_type,
         verbose=verbose,
         correction_batch_size=batch_size,
+        credentials=credentials,
     )
     if is_monitor:
         node.run_transmission_monitor()
@@ -336,7 +375,8 @@ def main():
     node_parser.add_argument("--esp32-port", default=None, help="ESP32 serial port (e.g. /dev/cu.usbserial-*)")
     node_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
     node_parser.add_argument("--hardware", action="store_true", help="Prefer physical hardware links")
-    node_parser.add_argument("--duration", type=int, default=None, help="Run for N seconds then exit")
+    node_parser.add_argument("--monitor", action="store_true", help="Run in Live Transmission Monitor mode without typing in terminal")
+    node_parser.add_argument("--no-prompt", action="store_true", help="Disable terminal prompt and monitor live transmissions")
     node_parser.add_argument("--verbose", action="store_true", help="Report error corrections at 1-bit granularity")
     node_parser.add_argument("--correction-batch-size", type=int, default=None, help="Batch size for correction reporting (default: 1 in verbose, 10 otherwise)")
 
@@ -463,7 +503,12 @@ def main():
         print(f"QuSec v{__version__}")
         return 0
 
-    if not args.command or args.command == "run":
+    if not args.command:
+        if getattr(args, "json", False) is False:
+            print_banner()
+        return cmd_node(args)
+
+    if args.command == "run":
         if getattr(args, "json", False) is False:
             print_banner()
 

@@ -20,7 +20,7 @@ from rich import box
 
 from qusec.detection.qber import qber, hoeffding_margin
 from qusec.detection.threshold import ThresholdEngine, DynamicThresholdEngine
-from qusec.quantum.backend import get_backend_label, normalize_backend_type
+from qusec.quantum.backend import get_backend_label, normalize_backend_type, prompt_backend_selection
 from qusec.hardware.esp32 import ESP32Detector, ESP32Device
 from qusec.hardware.rng import RandomSource
 from qusec.hardware.optical import QuantumChannel, EthernetDetector
@@ -71,9 +71,12 @@ class QuSecNode:
         backend_type: str = "simulator",
         verbose: bool = False,
         correction_batch_size: Optional[int] = None,
+        credentials: Optional[Dict[str, Any]] = None,
     ):
         self.verbose = verbose
         self.correction_batch_size = correction_batch_size
+        self.credentials = credentials
+        self.transmission_mode = "teleportation"
         r = (role or "peer").lower()
         if r in ("peer_b", "bob", "2"):
             self.role = "receiver"
@@ -171,8 +174,8 @@ class QuSecNode:
         self.threshold_engine = DynamicThresholdEngine(baseline_q0=0.010, alpha_traffic=0.012)
 
         # Quantum engines
-        self.entanglement = EntanglementEngine(backend_type=self.backend_type)
-        self.teleporter = QuantumTeleportationEngine(backend_type=self.backend_type)
+        self.entanglement = EntanglementEngine(backend_type=self.backend_type, credentials=self.credentials)
+        self.teleporter = QuantumTeleportationEngine(backend_type=self.backend_type, credentials=self.credentials)
         self.sarg04 = SARG04ProtocolEngine()
         self.cascade = CascadeReconciler(verbose=self.verbose, correction_batch_size=self.correction_batch_size)
         self.privacy = PrivacyAmplifier()
@@ -225,6 +228,24 @@ class QuSecNode:
     def peer_quantum_public_key(self) -> QuantumPublicKey:
         """Peer's Quantum Public Key."""
         return self.session_mgr.get_peer_quantum_public_key()
+
+    def set_backend(self, backend_type: str, credentials: Optional[Dict[str, Any]] = None):
+        """Update backend and reconfigure quantum engines dynamically."""
+        self.backend_type = normalize_backend_type(backend_type)
+        self.backend_label = get_backend_label(self.backend_type)
+        self.credentials = credentials
+        self.entanglement = EntanglementEngine(backend_type=self.backend_type, credentials=self.credentials)
+        self.teleporter = QuantumTeleportationEngine(backend_type=self.backend_type, credentials=self.credentials)
+        self.gateway_ctx.backend_name = self.backend_label
+        self.gateway_ctx.backend_type = self.backend_type
+
+    def set_mode(self, mode: str):
+        """Set transmission dual mode ('teleportation' or 'otp')."""
+        m = str(mode).strip().lower()
+        if m in ("otp", "onetimepad", "one_time_pad"):
+            self.transmission_mode = "otp"
+        else:
+            self.transmission_mode = "teleportation"
 
 
     def trigger_esp32_threat_alarm(self, enable: bool = True):
@@ -1251,8 +1272,28 @@ class QuSecNode:
                 "sender_pk": sender_pk.fingerprint if sender_pk else "Unknown",
                 "timestamp": time.time(),
             }
-            self.received_messages.append(record)
-            self.gateway_ctx.received_messages.append(record)
+            # Render incoming OTP security report in terminal
+            ct_snippet = ct_hex[:32] + "..." if len(ct_hex) > 32 else ct_hex
+            sig_snippet = (quantum_sig.get("signature_hex", "")[:32] + "...") if isinstance(quantum_sig, dict) and "signature_hex" in quantum_sig else "N/A"
+            self.render_quantum_security_report(
+                session_id=self.session_mgr.session_id or "a91f",
+                sender_name=sender_name,
+                recipient_name=self.role_title,
+                total_qubits=0,
+                pauli_x_count=0,
+                pauli_z_count=0,
+                conclusive_sifted=len(raw_keys) if raw_keys else 0,
+                detected_errors=0,
+                calculated_qber=0.0,
+                threshold=0.060,
+                hoeffding_eps=0.0,
+                decision="VERIFIED" if sig_valid else "REJECTED (SIGNATURE MISMATCH)",
+                threat_type="Signature Mismatch" if not sig_valid else None,
+                recipient_sk_fingerprint=self.session_mgr.keypair.private_key.fingerprint,
+                sender_pk_fingerprint=sender_pk.fingerprint if sender_pk else "Unknown",
+                sig_decision=sig_status,
+                decrypted_message=decrypted_text,
+            )
 
             self.ui.add_log(f"Received from {sender_name}: \"{decrypted_text}\" [OTP]")
             self.events.emit("message_received", record)
@@ -1372,35 +1413,47 @@ class QuSecNode:
 
     def run_interactive_chat(self):
         """
-        Runs continuous interactive two-way quantum chat directly in the terminal.
-        Starts as soon as users begin messaging and loops continuously until turned off (Ctrl+C or /quit).
+        Runs continuous interactive full-duplex two-way quantum communication directly in the terminal.
+        Supports dual-mode quantum transport:
+        1. Quantum Teleportation (E91 entangled Bell pairs + Pauli BSM corrections)
+        2. Quantum One-Time Pad (Information-theoretic OTP with SARG04 key burn-on-use zeroization)
+        Allows dynamic backend switching (/backend) and mode switching (/mode).
         Concurrent with the web platform gateway so messages from web platform are also received.
         """
         self.initialize()
         console = Console()
-        console.print(f"[bold cyan]╔══════════════════════════════════════════════════════════════════════╗[/bold cyan]")
-        console.print(f"[bold green]║   QuSec Quantum Transport Active · Role: [{self.role_title}]                 ║[/bold green]")
-        console.print(f"[bold cyan]╠══════════════════════════════════════════════════════════════════════╣[/bold cyan]")
-        fibre_tag = "[bold green]OK[/bold green]" if self.quantum_channel.link_ok else "[yellow]SIMULATED[/yellow]"
-        esp_tag = "[bold green]OK[/bold green]" if self.classical_channel.esp32_ok else "[yellow]SIMULATED[/yellow]"
-        console.print(f" • Optical Channel: {fibre_tag} | ESP32 Classical: {esp_tag}")
-        console.print(f" • Peer Target: [bold yellow]{self.peer_title}[/bold yellow] ({self.peer_host})")
-        console.print(f" • Web Platform Gateway: [cyan]http://127.0.0.1:{self.gateway_port}[/cyan]")
-        console.print(f" • Active Key Pool: [bold green]{self.key_pool.available_bits} bits[/bold green]")
-        console.print(f" • Commands: [dim]/status, /rekey, /quit (or press Ctrl+C to turn off)[/dim]")
-        console.print(f"[bold cyan]╚══════════════════════════════════════════════════════════════════════╝[/bold cyan]\n")
+
+        fibre_tag = "[bold green]ONLINE (Photons Crossing Glass Fibre)[/bold green]" if self.quantum_channel.link_ok else "[yellow]SIMULATION[/yellow]"
+        esp_tag = "[bold green]ONLINE (ESP32 Hardware Connected)[/bold green]" if self.classical_channel.esp32_ok else "[yellow]SIMULATION[/yellow]"
+
+        header_lines = (
+            f"[bold cyan]╔══════════════════════════════════════════════════════════════════════════════╗[/bold cyan]\n"
+            f"[bold green]║    ⚛️  QUSEC DUAL-MODE QUANTUM TERMINAL · TWO-WAY COMMUNICATION                 ║[/bold green]\n"
+            f"[bold cyan]╠══════════════════════════════════════════════════════════════════════════════╣[/bold cyan]\n"
+            f" • [bold white]Architecture:[/bold white]          [bold green]Full-Duplex Dual Mode (Bidirectional Two-Way Communication)[/bold green]\n"
+            f" • [bold white]Transmission Mode:[/bold white]     [bold yellow]{self.transmission_mode.upper()}[/bold yellow] [dim](Toggle with /mode teleportation or /mode otp)[/dim]\n"
+            f" • [bold white]Execution Backend:[/bold white]     [bold magenta]{self.backend_label}[/bold magenta] [dim](Switch with /backend)[/dim]\n"
+            f" • [bold white]Local Node Role:[/bold white]       [bold yellow]{self.role_title}[/bold yellow] (Target Peer: [cyan]{self.peer_title}[/cyan] at {self.peer_host})\n"
+            f" • [bold white]Optical Link (Fibre):[/bold white]  {fibre_tag} [dim](Local: {self.optical_port} ➔ Peer: {self.peer_optical_port})[/dim]\n"
+            f" • [bold white]Classical Link (ESP32):[/bold white] {esp_tag} [dim](Local: {self.classical_port} ➔ Peer: {self.peer_classical_port})[/dim]\n"
+            f" • [bold white]Web Platform Gateway:[/bold white]  [bold white]http://127.0.0.1:{self.gateway_port}[/bold white] [dim](Bridge: https://shnik-lake.vercel.app)[/dim]\n"
+            f" • [bold white]Active Key Pool:[/bold white]       [bold green]{self.key_pool.available_bits:,} bits[/bold green] [dim](Burn-on-use zeroization)[/dim]\n"
+            f" • [bold white]Interactive Commands:[/bold white]  [dim]/mode <teleport|otp>, /backend, /status, /rekey, /attack, /help, /quit[/dim]\n"
+            f"[bold cyan]╚══════════════════════════════════════════════════════════════════════════════╝[/bold cyan]\n"
+        )
+        console.print(header_lines)
 
         def handle_chat_msg(record):
             sender = record.get("from", self.peer_title)
             text = record.get("text", "")
-            mode = record.get("mode", "teleportation")
+            mode = record.get("mode", self.transmission_mode)
             threat = record.get("threat", False)
             decision = record.get("decision", "VERIFIED")
             if threat:
                 console.print(f"\n[bold red]◄ [{sender}]: [BLOCKED - {decision}][/bold red]")
                 console.print(f"[bold red]  ⚠ Channel threat detected! ESP32 Second LED is BLINKING.[/bold red]")
             else:
-                console.print(f"\n[bold magenta]◄ [{sender}]:[/bold magenta] [bold white]{text}[/bold white] [dim]({mode} · {decision})[/dim]")
+                console.print(f"\n[bold magenta]◄ [{sender}]:[/bold magenta] [bold white]{text}[/bold white] [dim]({mode.upper()} · {decision})[/dim]")
             print(f"[{self.role_title}] > ", end="", flush=True)
 
         self.on_message_callback = handle_chat_msg
@@ -1418,27 +1471,73 @@ class QuSecNode:
                 if line.lower() in ("/quit", "/exit", "quit", "exit"):
                     console.print("[yellow]Turning off QuSec quantum transport...[/yellow]")
                     break
-                elif line.lower() == "/status":
+
+                elif line.lower() == "/status" or line.lower() == "/dashboard":
                     status = self.session_mgr.get_session_summary()
-                    console.print(f"[cyan]Session: {status['session_id']} | Key Pool: {self.key_pool.available_bits} bits | QBER: {status['qber']*100:.2f}% | Fidelity: {status['fidelity']:.2f}[/cyan]")
+                    t = Table(title="[bold cyan]QuSec Live Node Status[/bold cyan]", box=box.ROUNDED)
+                    t.add_column("Parameter", style="cyan")
+                    t.add_column("Current State", style="green")
+                    t.add_row("Node Role", f"{self.role_title} (Target: {self.peer_title})")
+                    t.add_row("Communication Mode", "Full-Duplex Dual Mode (Two-Way)")
+                    t.add_row("Transmission Mode", self.transmission_mode.upper())
+                    t.add_row("Quantum Backend", self.backend_label)
+                    t.add_row("Session ID", str(status.get("session_id", "N/A")))
+                    t.add_row("Key Pool Capacity", f"{self.key_pool.available_bits:,} bits available")
+                    t.add_row("Current QBER", f"{status.get('qber', 0.0) * 100:.2f}%")
+                    t.add_row("Entanglement Fidelity", f"{status.get('fidelity', 0.98):.2f}")
+                    t.add_row("Optical Fiber Link", "ONLINE" if self.quantum_channel.link_ok else "SIMULATION")
+                    t.add_row("ESP32 Classical Link", "ONLINE" if self.classical_channel.esp32_ok else "SIMULATION")
+                    t.add_row("Platform Gateway Port", str(self.gateway_port))
+                    console.print(t)
+
+                elif line.lower().startswith("/backend"):
+                    new_backend, new_creds = prompt_backend_selection(console=console)
+                    self.set_backend(new_backend, new_creds)
+                    console.print(f"[bold green]✔ Execution backend switched to: [bold white]{self.backend_label}[/bold white][/bold green]\n")
+
+                elif line.lower().startswith("/mode"):
+                    parts = line.split()
+                    if len(parts) > 1:
+                        target_mode = parts[1].strip().lower()
+                        self.set_mode(target_mode)
+                    else:
+                        # Toggle
+                        new_mode = "otp" if self.transmission_mode == "teleportation" else "teleportation"
+                        self.set_mode(new_mode)
+                    console.print(f"[bold green]✔ Dual-mode transmission set to: [bold white]{self.transmission_mode.upper()}[/bold white][/bold green]\n")
+
                 elif line.lower() == "/rekey":
                     console.print("[yellow]Replenishing entanglement key pool...[/yellow]")
                     added = self.replenish_key_pool(512)
-                    console.print(f"[green]✔ Added {added} bits. Available: {self.key_pool.available_bits} bits[/green]")
+                    console.print(f"[bold green]✔ Added {added} bits. Available pool: {self.key_pool.available_bits:,} bits[/bold green]\n")
+
                 elif line.lower().startswith("/attack"):
                     parts = line.split()
-                    if len(parts) > 1 and parts[1].lower() in ("tampering", "forgery", "intercept_resend"):
+                    if len(parts) > 1 and parts[1].lower() in ("tampering", "forgery", "intercept_resend", "pauli", "disturbance"):
                         self.active_attack = parts[1].lower()
-                        console.print(f"[bold red]⚠ Active attack set on outgoing channel: {self.active_attack.upper()}[/bold red]")
+                        console.print(f"[bold red]⚠ Active adversary attack armed on outgoing link: {self.active_attack.upper()}[/bold red]\n")
                     else:
                         self.active_attack = None
-                        console.print("[green]✔ Attack simulation cleared. Channel set to honest mode.[/green]")
+                        console.print("[bold green]✔ Attack simulation cleared. Channel set to honest mode.[/bold green]\n")
+
                 elif line.lower() == "/help":
-                    console.print("[dim]Commands: /status, /rekey, /attack <tampering|forgery|none>, /quit (turn off)[/dim]")
+                    help_text = (
+                        "[bold cyan]Available Two-Way Dual-Mode Terminal Commands:[/bold cyan]\n"
+                        "  [bold white]/mode <teleport|otp>[/bold white]  · Toggle or set dual mode (Teleportation or OTP)\n"
+                        "  [bold white]/backend[/bold white]             · Switch quantum execution backend (1. Aersim, 2. Noisy AerSim, 3. Quantum Hardware)\n"
+                        "  [bold white]/status[/bold white]              · View complete quantum session and key pool status table\n"
+                        "  [bold white]/rekey[/bold white]               · Trigger immediate Bell-pair replenishment of cryptographic key pool\n"
+                        "  [bold white]/attack <vector>[/bold white]     · Simulate channel attack (tampering, forgery, intercept_resend, none)\n"
+                        "  [bold white]/quit[/bold white]                · Gracefully shut down node and zeroize key material\n"
+                        "  [bold white]<message text>[/bold white]      · Type any text to transmit quantum-secured to peer\n"
+                    )
+                    console.print(Panel(help_text, title="[bold white]QUSEC COMMAND HELP[/bold white]", border_style="cyan", box=box.ROUNDED))
+
                 else:
-                    res = self.send_message(self.peer_role, line, mode="teleportation")
+                    res = self.send_message(self.peer_role, line, mode=self.transmission_mode)
                     qubits = res.get("qubits_teleported", len(line) * 8)
-                    console.print(f"[bold green]► [You → {self.peer_title}]:[/bold green] [white]\"{line}\"[/white] [dim](Teleported: {qubits} qubits | Link: quantum-secure)[/dim]")
+                    mode_label = self.transmission_mode.upper()
+                    console.print(f"[bold green]► [You → {self.peer_title}]:[/bold green] [white]\"{line}\"[/white] [dim]({mode_label} · {qubits} qubits | Link: quantum-secure)[/dim]")
 
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted by user. Turning off...[/yellow]")

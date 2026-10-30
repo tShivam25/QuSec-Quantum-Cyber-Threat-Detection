@@ -20,11 +20,11 @@ def normalize_backend_type(backend_type: Any) -> str:
     if not backend_type:
         return "simulator"
     b = str(backend_type).strip().lower()
-    if b in ("1", "aer", "aersimulator", "simulator", "ideal"):
+    if b in ("1", "1.", "aer", "aersim", "1. aersim", "aersimulator", "simulator", "ideal"):
         return "simulator"
-    elif b in ("2", "noisy", "noisy_aer", "noisy_aersimulator"):
+    elif b in ("2", "2.", "noisy", "noisy aersim", "2. noisy aersim", "noisy aersimulator", "noisy_aer", "noisy_aersim", "noisy_aersimulator"):
         return "noisy"
-    elif b in ("3", "hardware", "ibm", "ibm_quantum", "quantum_hardware"):
+    elif b in ("3", "3.", "hardware", "quantum hardware", "3. quantum hardware", "ibm", "ibm_quantum", "quantum_hardware", "qpu"):
         return "hardware"
     return "simulator"
 
@@ -33,12 +33,90 @@ def get_backend_label(backend_type: Any) -> str:
     """Return a human-readable title and description of the quantum backend."""
     normalized = normalize_backend_type(backend_type)
     if normalized == "simulator":
-        return "AerSimulator (Ideal Quantum State Simulator)"
+        return "Aersim (Ideal Quantum State Simulator)"
     elif normalized == "noisy":
-        return "Noisy AerSimulator (Depolarizing Noise & Thermal Relaxation Channel)"
+        return "Noisy AerSim (Depolarizing Noise & Thermal Relaxation Channel)"
     elif normalized == "hardware":
-        return "Quantum Hardware (IBM Quantum Cloud Runtime)"
-    return "AerSimulator (Ideal Quantum State Simulator)"
+        return "Quantum Hardware (IBM Quantum Cloud Hardware)"
+    return "Aersim (Ideal Quantum State Simulator)"
+
+
+def prompt_backend_selection(console=None, default: str = "1"):
+    """
+    Interactive TUI menu prompting the user to select the quantum execution backend:
+    1. Aersim
+    2. Noisy AerSim
+    3. Quantum Hardware
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.prompt import Prompt
+    from rich import box
+
+    c = console or Console()
+
+    panel_text = (
+        "[bold cyan]Select Quantum Execution Backend for Dual-Mode Transport:[/bold cyan]\n\n"
+        "  [bold green]1. Aersim[/bold green]           · Fast, ideal local quantum state simulation via Qiskit Aer\n"
+        "  [bold yellow]2. Noisy AerSim[/bold yellow]     · Calibrated realistic noise channel (depolarizing + thermal)\n"
+        "  [bold magenta]3. Quantum Hardware[/bold magenta] · Real IBM Quantum superconducting QPUs (Qiskit Runtime)"
+    )
+    c.print(Panel(panel_text, title="[bold white]⚛️  QUSEC QUANTUM BACKEND SELECTION[/bold white]", border_style="cyan", box=box.ROUNDED))
+
+    choice = Prompt.ask(
+        "[bold cyan]Select backend [1/2/3] (1: Aersim, 2: Noisy AerSim, 3: Quantum Hardware)[/bold cyan]",
+        choices=["1", "2", "3", "aersim", "noisy", "hardware", "quantum hardware"],
+        default=default,
+        console=c,
+    )
+
+    norm = normalize_backend_type(choice)
+    credentials = None
+
+    if norm == "simulator":
+        c.print("[bold green]✔ Configured Backend: [bold white]1. Aersim (Ideal Quantum State Simulator)[/bold white][/bold green]\n")
+        return "simulator", None
+
+    elif norm == "noisy":
+        c.print("[bold green]✔ Configured Backend: [bold white]2. Noisy AerSim (Depolarizing & Thermal Relaxation)[/bold white][/bold green]\n")
+        return "noisy", None
+
+    elif norm == "hardware":
+        c.print(Panel(
+            "[bold magenta]IBM Quantum Hardware Setup[/bold magenta]\n"
+            "Connect to real superconducting QPUs via IBM Quantum Cloud Runtime.",
+            border_style="magenta",
+            box=box.ROUNDED,
+        ))
+        existing_token = os.environ.get("IBM_QUANTUM_TOKEN") or os.environ.get("QISKIT_IBM_TOKEN")
+        if existing_token:
+            use_env = Prompt.ask(
+                f"Detected environment token ([dim]{existing_token[:6]}...{existing_token[-4:]}[/dim]). Use this token?",
+                choices=["y", "n"],
+                default="y",
+                console=c,
+            )
+            if use_env.lower() == "y":
+                token = existing_token
+            else:
+                token = Prompt.ask("Enter IBM Quantum API Token", password=True, console=c)
+        else:
+            token = Prompt.ask("Enter IBM Quantum API Token (or press Enter for demo / fake hardware fallback)", password=True, default="", console=c)
+
+        backend_name = Prompt.ask("Enter IBM Quantum Backend Name", default="ibm_kyoto", console=c)
+        instance = Prompt.ask("Enter IBM Quantum Instance / CRN", default="ibm-q/open/main", console=c)
+
+        credentials = {
+            "token": token if token else None,
+            "backend_name": backend_name,
+            "instance": instance,
+        }
+        if token:
+            os.environ["IBM_QUANTUM_TOKEN"] = token
+            c.print(f"[bold green]✔ Configured Backend: [bold white]Quantum Hardware ({backend_name})[/bold white][/bold green]\n")
+        else:
+            c.print(f"[yellow]Notice: No IBM Quantum token provided. Configured for Quantum Hardware simulation fallback ({backend_name}).[/yellow]\n")
+        return "hardware", credentials
 
 
 def get_backend(backend_type: str = "simulator", credentials: Optional[Dict[str, Any]] = None):

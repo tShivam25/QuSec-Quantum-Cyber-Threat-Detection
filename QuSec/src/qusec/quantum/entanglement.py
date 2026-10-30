@@ -6,7 +6,7 @@ test-pair sacrifice, CHSH inequality evaluation, and quantum fidelity estimation
 
 import math
 import random
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
 from qusec.quantum.backend import execute_circuit
 from qusec.quantum.bell import bell_pair, compute_pauli_correlator
@@ -18,8 +18,9 @@ class EntanglementEngine:
     CHSH test-pair sacrifice, and entanglement verification.
     """
 
-    def __init__(self, backend_type: str = "simulator"):
+    def __init__(self, backend_type: str = "simulator", credentials: Optional[Dict[str, Any]] = None):
         self.backend_type = backend_type
+        self.credentials = credentials
 
     def create_bell_pair(self) -> QuantumCircuit:
         """Create a standard maximally entangled Bell pair |Phi+>."""
@@ -102,7 +103,7 @@ class EntanglementEngine:
             qc.measure(0, 0)
             qc.measure(1, 1)
 
-            counts = execute_circuit(qc, backend_type=self.backend_type, shots=num_shots_per_setting)
+            counts = execute_circuit(qc, backend_type=self.backend_type, credentials=self.credentials, shots=num_shots_per_setting)
             corr = compute_pauli_correlator(counts)
             correlators[f"{a_name}_{b_name}"] = corr
 
