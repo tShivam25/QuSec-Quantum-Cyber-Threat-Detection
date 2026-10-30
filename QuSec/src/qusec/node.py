@@ -19,7 +19,8 @@ from rich.table import Table
 from rich import box
 
 from qusec.detection.qber import qber, hoeffding_margin
-from qusec.detection.threshold import ThresholdEngine
+from qusec.detection.threshold import ThresholdEngine, DynamicThresholdEngine
+from qusec.quantum.backend import get_backend_label, normalize_backend_type
 from qusec.hardware.esp32 import ESP32Detector, ESP32Device
 from qusec.hardware.rng import RandomSource
 from qusec.hardware.optical import QuantumChannel, EthernetDetector
@@ -69,20 +70,44 @@ class QuSecNode:
         force_simulation: bool = False,
         backend_type: str = "simulator",
     ):
-        r = role.lower()
-        if r in ("alice", "sender"):
-            self.role = "sender"
-            self.peer_role = "receiver"
-        else:
+        r = (role or "peer").lower()
+        if r in ("peer_b", "bob", "2"):
             self.role = "receiver"
             self.peer_role = "sender"
+            self.role_title = "Peer B"
+            self.peer_title = "Peer A"
+        elif r == "receiver":
+            self.role = "receiver"
+            self.peer_role = "sender"
+            self.role_title = "Receiver"
+            self.peer_title = "Sender"
+        elif r in ("peer_a", "alice", "1"):
+            self.role = "sender"
+            self.peer_role = "receiver"
+            self.role_title = "Peer A"
+            self.peer_title = "Peer B"
+        elif r in ("peer", "dual"):
+            if gateway_port == 8766 or optical_port == 9878:
+                self.role = "receiver"
+                self.peer_role = "sender"
+                self.role_title = "Peer B"
+                self.peer_title = "Peer A"
+            else:
+                self.role = "sender"
+                self.peer_role = "receiver"
+                self.role_title = "Peer A"
+                self.peer_title = "Peer B"
+        else:
+            self.role = "sender"
+            self.peer_role = "receiver"
+            self.role_title = "Sender"
+            self.peer_title = "Receiver"
 
-        self.role_title = "Sender" if self.role == "sender" else "Receiver"
-        self.peer_title = "Receiver" if self.role == "sender" else "Sender"
         self.peer_host = peer_host
         self.esp32_port = esp32_port
         self.force_simulation = force_simulation
-        self.backend_type = backend_type
+        self.backend_type = normalize_backend_type(backend_type)
+        self.backend_label = get_backend_label(self.backend_type)
 
         # Smart port configuration:
         # If running locally on localhost, assign non-colliding default ports;
@@ -131,6 +156,9 @@ class QuSecNode:
             force_simulation=self.force_simulation,
         )
 
+        # Dynamic Mathematical Threshold Engine (Auto-adjusts for traffic, message length, and drift)
+        self.threshold_engine = DynamicThresholdEngine(baseline_q0=0.010, alpha_traffic=0.012)
+
         # Quantum engines
         self.entanglement = EntanglementEngine(backend_type=self.backend_type)
         self.teleporter = QuantumTeleportationEngine(backend_type=self.backend_type)
@@ -160,6 +188,9 @@ class QuSecNode:
             send_message_fn=self.send_message,
             rekey_fn=self.replenish_key_pool,
             init_session_fn=self.initiate_session,
+            backend_name=self.backend_label,
+            backend_type=self.backend_type,
+            threshold_engine=self.threshold_engine,
         )
         self.gateway_server = GatewayServer(self.gateway_ctx, host="0.0.0.0", port=self.gateway_port)
 
@@ -167,7 +198,6 @@ class QuSecNode:
         self._listener_thread: Optional[threading.Thread] = None
         self._watchdog_thread: Optional[threading.Thread] = None
         self.on_message_callback: Optional[Any] = None
-        self.threshold_engine = ThresholdEngine(sa=0.05, sv=0.15, q_threshold=0.06)
         self.active_attack: Optional[str] = None
 
     @property
@@ -372,6 +402,8 @@ class QuSecNode:
         sender_sk_fingerprint: str,
         ciphertext_snippet: str,
         signature_snippet: str,
+        traffic_rate: Optional[float] = None,
+        dynamic_threshold: Optional[float] = None,
     ):
         """Render formatted outgoing quantum transmission report in terminal."""
         console = Console()
@@ -386,6 +418,8 @@ class QuSecNode:
 
         table.add_row("Session ID", session_id)
         table.add_row("Transmission Direction", f"{self.role_title} ➔ {recipient_name}")
+        table.add_row("Channel Architecture", "Full-Duplex Dual Mode (Bidirectional Sender & Receiver)")
+        table.add_row("Execution Backend", f"[bold magenta]{self.backend_label}[/bold magenta]")
         table.add_row("Plaintext Message", f"\"{message}\"")
         table.add_row("Receiver Quantum Public Key", f"[bold green]{recipient_pk_fingerprint}[/bold green] (Encrypted Payload)")
         table.add_row("Sender Quantum Private Key", f"[bold yellow]{sender_sk_fingerprint}[/bold yellow] (Signed Digital Signature)")
@@ -393,6 +427,12 @@ class QuSecNode:
         table.add_row("Encrypted QDS Signature", f"[dim]{signature_snippet}[/dim]")
         table.add_row("Optical Channel (Fibre)", f"{total_qubits} Qubits Dispatched (Port {self.optical_port})")
         table.add_row("ESP32 Classical Channel", f"Pauli bits X={pauli_x_count}, Z={pauli_z_count} & MAC (Port {self.classical_port})")
+
+        if traffic_rate is not None:
+            table.add_row("Live Channel Traffic (Φ)", f"{traffic_rate:.2f} msgs/sec (Sliding Window)")
+        if dynamic_threshold is not None:
+            table.add_row("Auto-Adjusted Q_th", f"{dynamic_threshold * 100:.2f}% (Traffic & Message Adapted)")
+
         carrier_status = "[bold green]Active (Photons Crossing Glass Fibre)[/bold green]" if self.quantum_channel.link_ok else "[yellow]Simulation[/yellow]"
         table.add_row("Channel Status", carrier_status)
 
@@ -522,6 +562,15 @@ class QuSecNode:
             self.ui.set_pipeline_stage("Correct", "done")
             self.ui.add_log(f"Sent to {target_role}: \"{message}\" [Quantum Public-Key Encrypted + QDS Signed]")
 
+            # Record transmission and compute dynamic threshold parameters
+            self.threshold_engine.record_transmission()
+            curr_traffic = self.threshold_engine.get_traffic_rate()
+            dyn_metrics = self.threshold_engine.compute_dynamic_threshold(
+                sample_size=max(16, total_qubits),
+                message_length=len(message),
+            )
+            dyn_th = dyn_metrics["q_dyn"]
+
             # Render Outgoing Quantum Transmission report in terminal
             ct_snippet = encrypted_payload["ciphertext_hex"][:32] + "..."
             sig_snippet = quantum_sig["signature_hex"][:32] + "..."
@@ -536,6 +585,8 @@ class QuSecNode:
                 sender_sk_fingerprint=sender_sk.fingerprint,
                 ciphertext_snippet=ct_snippet,
                 signature_snippet=sig_snippet,
+                traffic_rate=curr_traffic,
+                dynamic_threshold=dyn_th,
             )
 
             # Record in sent store
@@ -571,6 +622,8 @@ class QuSecNode:
                 "recipient_public_key": recipient_pk.fingerprint,
                 "sender_private_key": sender_sk.fingerprint,
                 "security": "quantum-asymmetric-public-key + QDS",
+                "backend": self.backend_label,
+                "dynamic_threshold": dyn_th,
             }
 
         else:  # One-Time-Pad mode
@@ -599,6 +652,14 @@ class QuSecNode:
             self.classical_channel.send_classical("OTP_MESSAGE", payload, mac=mac_tag)
             self.ui.add_log(f"Sent to {target_role}: \"{message}\" [OTP - {otp_res['bit_length']} bits burned]")
 
+            self.threshold_engine.record_transmission()
+            curr_traffic = self.threshold_engine.get_traffic_rate()
+            dyn_metrics = self.threshold_engine.compute_dynamic_threshold(
+                sample_size=max(16, len(raw_keys)),
+                message_length=len(message),
+            )
+            dyn_th = dyn_metrics["q_dyn"]
+
             ct_snippet = encrypted_payload["ciphertext_hex"][:32] + "..."
             sig_snippet = quantum_sig["signature_hex"][:32] + "..."
             self.render_outgoing_transmission_report(
@@ -612,6 +673,8 @@ class QuSecNode:
                 sender_sk_fingerprint=sender_sk.fingerprint,
                 ciphertext_snippet=ct_snippet,
                 signature_snippet=sig_snippet,
+                traffic_rate=curr_traffic,
+                dynamic_threshold=dyn_th,
             )
 
             record = {
@@ -692,6 +755,7 @@ class QuSecNode:
         sender_pk_fingerprint: Optional[str] = None,
         sig_decision: Optional[str] = None,
         decrypted_message: Optional[str] = None,
+        dyn_metrics: Optional[Dict[str, Any]] = None,
     ):
         """
         Renders the full QuSec Quantum Security Report table in terminal,
@@ -708,7 +772,8 @@ class QuSecNode:
         table.add_column("Value / Measurement", style="white")
 
         table.add_row("Session ID", session_id)
-        table.add_row("Transmission Link", f"{sender_name} ➔ {recipient_name} [Bidirectional]")
+        table.add_row("Transmission Link", f"{sender_name} ➔ {recipient_name} [Bidirectional Dual Mode]")
+        table.add_row("Execution Backend", f"[bold magenta]{self.backend_label}[/bold magenta]")
         table.add_row("Protocol", "Quantum Teleportation (3-Qubit Bell) + SARG04 Decoy + QDS")
 
         if recipient_sk_fingerprint:
@@ -728,15 +793,25 @@ class QuSecNode:
         table.add_row("Detected Quantum Bit Errors", str(detected_errors))
 
         qber_color = "bold red" if calculated_qber > threshold else "bold green"
-        table.add_row("Calculated QBER", f"[{qber_color}]{calculated_qber:.4f} ({calculated_qber * 100:.2f}%)[/{qber_color}]")
+        table.add_row("Calculated QBER (Q_meas)", f"[{qber_color}]{calculated_qber:.4f} ({calculated_qber * 100:.2f}%)[/{qber_color}]")
         table.add_row("Hoeffding Margin (ε, δ=10⁻³)", f"{hoeffding_eps:.4f} ({hoeffding_eps * 100:.2f}%) [99.9% Conf.]")
-        table.add_row("Security Threshold (Q_th)", f"{threshold:.4f} ({threshold * 100:.2f}%)")
+
+        if dyn_metrics:
+            q0 = dyn_metrics.get("baseline_q0", 0.01) * 100
+            d_tr = dyn_metrics.get("delta_traffic", 0.0) * 100
+            d_st = dyn_metrics.get("delta_stat", 0.0) * 100
+            phi = dyn_metrics.get("traffic_rate_phi", 0.0)
+            th_detail = f"{threshold:.4f} ({threshold * 100:.2f}%) [Q0={q0:.1f}% + Traffic Δ={d_tr:.2f}% + Stat Δ={d_st:.2f}%]"
+            table.add_row("Auto-Adjusted Q_th", th_detail)
+            table.add_row("Live Channel Traffic (Φ)", f"{phi:.2f} msgs/sec (Raman Scattering Noise Compensated)")
+        else:
+            table.add_row("Security Threshold (Q_th)", f"{threshold:.4f} ({threshold * 100:.2f}%)")
 
         is_threat = (calculated_qber > threshold) or (decision != "VERIFIED")
         status_text = (
             f"[bold red]EXCEEDED (Threat Detected: {threat_type or 'Channel Compromise'})[/bold red]"
             if is_threat
-            else "[bold green]NORMAL (Within Tolerance)[/bold green]"
+            else "[bold green]NORMAL (Within Dynamic Tolerance)[/bold green]"
         )
         table.add_row("Threshold Status", status_text)
 
@@ -875,8 +950,17 @@ class QuSecNode:
                     json.dumps(clean_payload).encode("utf-8"), mac_tag, self.key_pool
                 )
 
-            # 5. Security Threshold Evaluation (ThresholdEngine Q_th = 0.06)
-            threshold = self.threshold_engine.q_threshold
+            # Record incoming transmission in dynamic threshold engine
+            self.threshold_engine.record_transmission()
+
+            # 5. Security Threshold Evaluation (Dynamic Mathematical Engine)
+            eval_res = self.threshold_engine.evaluate_channel(
+                calculated_qber=calc_qber,
+                sample_size=conclusive_mu if conclusive_mu > 0 else 16,
+                message_length=len(decrypted_text),
+            )
+            threshold = eval_res["threshold"]
+            dyn_metrics = eval_res.get("dynamic_metrics", {})
 
             threat_detected = False
             threat_type = None
@@ -889,8 +973,8 @@ class QuSecNode:
                 self.ui.set_hardware_status(fibre_ok=False, esp32_ok=self.classical_channel.esp32_ok, is_simulation=self.force_simulation)
             elif calc_qber > threshold:
                 threat_detected = True
-                threat_type = "Quantum Channel Tampering / Intercept-Resend"
-                decision = "REJECTED (QBER THRESHOLD EXCEEDED)"
+                threat_type = f"Quantum Channel Tampering / Intercept-Resend (QBER {calc_qber*100:.2f}% > Dynamic Q_th {threshold*100:.2f}%)"
+                decision = "REJECTED (DYNAMIC QBER THRESHOLD EXCEEDED)"
             elif not sig_valid:
                 threat_detected = True
                 threat_type = f"Quantum Digital Signature Invalid ({sig_status})"
@@ -938,6 +1022,7 @@ class QuSecNode:
                 sender_pk_fingerprint=sender_pk.fingerprint if sender_pk else "Unknown",
                 sig_decision=sig_status,
                 decrypted_message=decrypted_text,
+                dyn_metrics=dyn_metrics,
             )
 
             # 8. Show Message / Security Alert
@@ -1092,9 +1177,12 @@ class QuSecNode:
         console.print(f"[bold cyan]╠══════════════════════════════════════════════════════════════════════════════╣[/bold cyan]")
         fibre_tag = "[bold green]ONLINE (Glass Fibre Connected)[/bold green]" if self.quantum_channel.link_ok else "[yellow]SIMULATION[/yellow]"
         esp_tag = "[bold green]ONLINE (ESP32 Hardware Connected)[/bold green]" if self.classical_channel.esp32_ok else "[yellow]SIMULATION[/yellow]"
+        console.print(f" • Channel Architecture:          [bold green]Full-Duplex Dual Mode (Bidirectional Sender & Receiver)[/bold green]")
+        console.print(f" • Execution Backend:              [bold magenta]{self.backend_label}[/bold magenta]")
+        console.print(f" • Dynamic QBER Threshold Engine:  [bold green]ACTIVE (Auto-Adjusts for Message Length, Traffic & Drift)[/bold green]")
         console.print(f" • Hardware Classical Link (ESP32): {esp_tag}")
         console.print(f" • Hardware Quantum Link (Optical): {fibre_tag}")
-        console.print(f" • Node Role:                      [bold yellow]{self.role_title}[/bold yellow] (Peer: {self.peer_title})")
+        console.print(f" • Node Role:                      [bold yellow]{self.role_title}[/bold yellow] (Target Peer: {self.peer_title})")
         console.print(f" • Quantum Public Key:             [bold green]{self.session_mgr.keypair.public_key.fingerprint}[/bold green]")
         console.print(f" • Quantum Private Key:            [bold yellow]{self.session_mgr.keypair.private_key.fingerprint}[/bold yellow] [Secured in Memory]")
         console.print(f" • Peer Quantum Public Key:        [cyan]{self.session_mgr.get_peer_quantum_public_key().fingerprint}[/cyan]")

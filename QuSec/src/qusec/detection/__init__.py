@@ -9,7 +9,7 @@ from qusec.detection.qber import (
     theoretical_qber,
     TwoBasisQBEREstimator,
 )
-from qusec.detection.threshold import ThresholdEngine
+from qusec.detection.threshold import ThresholdEngine, DynamicThresholdEngine
 
 __all__ = [
     "qber",
@@ -18,4 +18,5 @@ __all__ = [
     "theoretical_qber",
     "TwoBasisQBEREstimator",
     "ThresholdEngine",
+    "DynamicThresholdEngine",
 ]

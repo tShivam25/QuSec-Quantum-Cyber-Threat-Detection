@@ -9,6 +9,7 @@ Provides commands:
 - qusec run: Interactive simulation suite (legacy compatibility).
 """
 
+import os
 import sys
 import json
 import urllib.request
@@ -25,6 +26,7 @@ from qusec.ui.banner import print_banner
 from qusec.ui.monitor import InteractiveSimulator
 from qusec.hardware.doctor import run_doctor
 from qusec.node import QuSecNode
+from qusec.quantum.backend import normalize_backend_type, get_backend_label
 
 console = Console()
 
@@ -118,7 +120,8 @@ def cmd_send(args):
     except urllib.error.URLError:
         # Gateway offline, spin up standalone node transmission
         console.print("[yellow]Gateway offline. Transmitting directly via local QuSec engine...[/yellow]")
-        node = QuSecNode(role="sender", force_simulation=True)
+        backend_type = getattr(args, "backend", "aer")
+        node = QuSecNode(role="sender", force_simulation=True, backend_type=backend_type)
         node.initialize()
         res = node.send_message(recipient, message, mode=mode)
         node.stop()
@@ -133,15 +136,40 @@ def cmd_send(args):
         return 0
 
 
+def _resolve_peer_config(args):
+    """Resolve role and ports based on --role and --peer arguments for dual-node setups."""
+    role = getattr(args, "role", "dual")
+    peer = getattr(args, "peer", None)
+    gateway_port = getattr(args, "port", None) or getattr(args, "gateway_port", None)
+    optical_port = getattr(args, "optical_port", None)
+    classical_port = getattr(args, "classical_port", None)
+
+    if peer:
+        p_str = str(peer).strip().lower()
+        if p_str in ("b", "2", "peer_b", "bob"):
+            role = "peer_b"
+            gateway_port = gateway_port or 8766
+            optical_port = optical_port or 9878
+            classical_port = classical_port or 9879
+        else:
+            role = "peer_a"
+            gateway_port = gateway_port or 8765
+            optical_port = optical_port or 9876
+            classical_port = classical_port or 9877
+
+    backend_type = getattr(args, "backend", "aer")
+    ibm_token = getattr(args, "ibm_token", None)
+    if ibm_token:
+        os.environ["IBM_QUANTUM_TOKEN"] = ibm_token
+
+    return role, gateway_port, optical_port, classical_port, backend_type
+
 
 def cmd_node(args):
     """Handle 'qusec node' command."""
-    role = getattr(args, "role", "sender")
+    role, gateway_port, optical_port, classical_port, backend_type = _resolve_peer_config(args)
     force_sim = getattr(args, "sim", False)
     duration = getattr(args, "duration", None)
-    optical_port = getattr(args, "optical_port", None)
-    classical_port = getattr(args, "classical_port", None)
-    gateway_port = getattr(args, "gateway_port", None)
     esp32_port = getattr(args, "esp32_port", None)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
 
@@ -153,6 +181,7 @@ def cmd_node(args):
         gateway_port=gateway_port,
         esp32_port=esp32_port,
         force_simulation=force_sim,
+        backend_type=backend_type,
     )
     node.run_live(duration_seconds=duration)
     return 0
@@ -160,18 +189,20 @@ def cmd_node(args):
 
 def cmd_gateway(args):
     """Handle 'qusec gateway' and 'qusec bridge' command - Live Transmission Monitor."""
-    role = getattr(args, "role", "sender")
+    role, gateway_port, optical_port, classical_port, backend_type = _resolve_peer_config(args)
     force_sim = getattr(args, "sim", False)
-    gateway_port = getattr(args, "port", None)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
     esp32_port = getattr(args, "esp32_port", None)
 
     node = QuSecNode(
         role=role,
         peer_host=peer_host,
+        optical_port=optical_port,
+        classical_port=classical_port,
         gateway_port=gateway_port,
         esp32_port=esp32_port,
         force_simulation=force_sim,
+        backend_type=backend_type,
     )
     node.run_transmission_monitor()
     return 0
@@ -179,12 +210,9 @@ def cmd_gateway(args):
 
 def cmd_chat(args):
     """Handle 'qusec chat' command - continuous interactive quantum chat or transmission monitor."""
-    role = getattr(args, "role", "sender")
+    role, gateway_port, optical_port, classical_port, backend_type = _resolve_peer_config(args)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
     force_sim = getattr(args, "sim", False)
-    optical_port = getattr(args, "optical_port", None)
-    classical_port = getattr(args, "classical_port", None)
-    gateway_port = getattr(args, "gateway_port", None)
     esp32_port = getattr(args, "esp32_port", None)
     is_monitor = getattr(args, "monitor", False) or getattr(args, "no_prompt", False)
 
@@ -196,6 +224,7 @@ def cmd_chat(args):
         gateway_port=gateway_port,
         esp32_port=esp32_port,
         force_simulation=force_sim,
+        backend_type=backend_type,
     )
     if is_monitor:
         node.run_transmission_monitor()
@@ -212,13 +241,19 @@ def main():
     parser.add_argument("--version", action="version", version=f"QuSec v{__version__}", help="Print version information")
     subparsers = parser.add_subparsers(dest="command")
 
+    backend_choices = ["1", "2", "3", "aer", "simulator", "noisy", "hardware"]
+    backend_help = "Quantum execution backend: 1. AerSimulator (ideal), 2. Noisy AerSimulator (depolarizing/thermal noise), 3. Quantum Hardware (IBM Quantum Cloud)"
+
     # 1. qusec doctor
     doctor_parser = subparsers.add_parser("doctor", help="Run hardware detection and diagnostics self-test")
     doctor_parser.add_argument("--peer-host", default="", help="Optional peer optical IP to probe end-to-end fiber carrier (e.g. 192.168.2.2)")
 
     # 2. qusec node
     node_parser = subparsers.add_parser("node", help="Run interactive QuSec node with live terminal UI")
-    node_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob"], default="sender", help="Node role: sender or receiver (default: sender)")
+    node_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob", "peer", "dual", "peer_a", "peer_b"], default="dual", help="Node role: sender, receiver, or dual/peer (default: dual)")
+    node_parser.add_argument("--peer", choices=["a", "b", "1", "2"], help="Peer identifier for dual-node setup on same machine (a=Peer A, b=Peer B)")
+    node_parser.add_argument("--backend", choices=backend_choices, default="aer", help=backend_help)
+    node_parser.add_argument("--ibm-token", default=None, help="IBM Quantum Cloud API token for hardware backend")
     node_parser.add_argument("--peer-host", default="127.0.0.1", help="Peer IP address (default: 127.0.0.1)")
     node_parser.add_argument("--optical-port", type=int, default=None, help="Optical channel UDP port")
     node_parser.add_argument("--classical-port", type=int, default=None, help="Classical channel UDP port")
@@ -229,16 +264,24 @@ def main():
     node_parser.add_argument("--duration", type=int, default=None, help="Run for N seconds then exit")
 
     # 3. qusec bridge (Live transmission monitor connected to Shnik website)
-    bridge_parser = subparsers.add_parser("bridge", help="Connect terminal to https://shnik-lake.vercel.app, ESP32, and optical link in live transmission monitor mode")
-    bridge_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob"], default="sender", help="Node role: sender or receiver (default: sender)")
+    bridge_parser = subparsers.add_parser("bridge", help="Connect terminal to https://shnik-lake.vercel.app, ESP32, and optical link in live dual-mode transmission monitor")
+    bridge_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob", "peer", "dual", "peer_a", "peer_b"], default="dual", help="Node role (default: dual)")
+    bridge_parser.add_argument("--peer", choices=["a", "b", "1", "2"], help="Peer identifier for dual-node setup on same machine (a=Peer A, b=Peer B)")
+    bridge_parser.add_argument("--backend", choices=backend_choices, default="aer", help=backend_help)
+    bridge_parser.add_argument("--ibm-token", default=None, help="IBM Quantum Cloud API token for hardware backend")
     bridge_parser.add_argument("--peer-host", default="127.0.0.1", help="Peer IP address (default: 127.0.0.1)")
-    bridge_parser.add_argument("--port", type=int, default=None, help="Gateway HTTP port (default: 8765 for sender, 8766 for receiver)")
+    bridge_parser.add_argument("--port", type=int, default=None, help="Gateway HTTP port (default: 8765 for Peer A, 8766 for Peer B)")
+    bridge_parser.add_argument("--optical-port", type=int, default=None, help="Optical channel UDP port")
+    bridge_parser.add_argument("--classical-port", type=int, default=None, help="Classical channel UDP port")
     bridge_parser.add_argument("--esp32-port", default=None, help="ESP32 serial port")
     bridge_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
 
     # 4. qusec chat (continuous interactive terminal chat or monitor)
     chat_parser = subparsers.add_parser("chat", help="Start continuous quantum chat or live transmission monitor")
-    chat_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob"], default="sender", help="Node role: sender or receiver (default: sender)")
+    chat_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob", "peer", "dual", "peer_a", "peer_b"], default="dual", help="Node role (default: dual)")
+    chat_parser.add_argument("--peer", choices=["a", "b", "1", "2"], help="Peer identifier for dual-node setup on same machine (a=Peer A, b=Peer B)")
+    chat_parser.add_argument("--backend", choices=backend_choices, default="aer", help=backend_help)
+    chat_parser.add_argument("--ibm-token", default=None, help="IBM Quantum Cloud API token for hardware backend")
     chat_parser.add_argument("--peer-host", default="127.0.0.1", help="Peer IP address (default: 127.0.0.1)")
     chat_parser.add_argument("--optical-port", type=int, default=None, help="Optical channel UDP port")
     chat_parser.add_argument("--classical-port", type=int, default=None, help="Classical channel UDP port")
@@ -250,27 +293,32 @@ def main():
 
     # 5. qusec gateway
     gateway_parser = subparsers.add_parser("gateway", help="Run platform bridge API gateway and transmission monitor")
-    gateway_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob"], default="sender", help="Node role (default: sender)")
+    gateway_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob", "peer", "dual", "peer_a", "peer_b"], default="dual", help="Node role (default: dual)")
+    gateway_parser.add_argument("--peer", choices=["a", "b", "1", "2"], help="Peer identifier for dual-node setup on same machine (a=Peer A, b=Peer B)")
+    gateway_parser.add_argument("--backend", choices=backend_choices, default="aer", help=backend_help)
+    gateway_parser.add_argument("--ibm-token", default=None, help="IBM Quantum Cloud API token for hardware backend")
     gateway_parser.add_argument("--peer-host", default="127.0.0.1", help="Peer IP address (default: 127.0.0.1)")
-    gateway_parser.add_argument("--port", type=int, default=None, help="Gateway HTTP port (default: 8765)")
+    gateway_parser.add_argument("--port", type=int, default=None, help="Gateway HTTP port (default: 8765 for Peer A, 8766 for Peer B)")
+    gateway_parser.add_argument("--optical-port", type=int, default=None, help="Optical channel UDP port")
+    gateway_parser.add_argument("--classical-port", type=int, default=None, help="Classical channel UDP port")
     gateway_parser.add_argument("--esp32-port", default=None, help="ESP32 serial port")
     gateway_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
 
-
-    # 4. qusec keys
+    # 6. qusec keys
     keys_parser = subparsers.add_parser("keys", help="Display cryptographic key pool status")
     keys_parser.add_argument("--gateway-url", default="http://127.0.0.1:8765/api/status", help="Gateway API URL")
 
-    # 5. qusec send
+    # 7. qusec send
     send_parser = subparsers.add_parser("send", help="Send quantum-secure message")
     send_parser.add_argument("message", nargs="?", default=None, help="Message text to transmit")
     send_parser.add_argument("--to", default="receiver", help="Recipient role (default: receiver)")
     send_parser.add_argument("--mode", choices=["teleportation", "otp"], default="teleportation", help="Transmission mode")
+    send_parser.add_argument("--backend", choices=backend_choices, default="aer", help=backend_help)
     send_parser.add_argument("--gateway-url", default="http://127.0.0.1:8765/api/send", help="Gateway API URL")
 
-    # 6. qusec run (legacy compatibility)
+    # 8. qusec run (legacy compatibility)
     run_parser = subparsers.add_parser("run", help="Run interactive simulator (legacy)")
-    run_parser.add_argument("--backend", choices=["simulator", "noisy", "hardware"], help="Backend execution mode")
+    run_parser.add_argument("--backend", choices=backend_choices, default="simulator", help=backend_help)
     run_parser.add_argument("--shots", type=int, default=1000, help="Number of shots for verification")
     run_parser.add_argument("--threshold", type=float, default=0.06, help="QBER threshold")
     run_parser.add_argument(

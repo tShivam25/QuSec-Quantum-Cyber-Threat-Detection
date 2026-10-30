@@ -2,10 +2,10 @@
 QuSec - Quantum Security Framework for Quantum Digital Signature Threat Detection
 """
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 from qusec.quantum.bell import bell_pair, correct
 from qusec.detection.qber import qber, hoeffding_margin, theoretical_qber, TwoBasisQBEREstimator
-from qusec.detection.threshold import ThresholdEngine
+from qusec.detection.threshold import ThresholdEngine, DynamicThresholdEngine
 from qusec.qds.signature import QuantumDigitalSignature
 from qusec.node import QuSecNode
 from qusec.hardware.optical import QuantumChannel
@@ -14,6 +14,7 @@ from qusec.hardware.rng import RandomSource
 from qusec.hardware.doctor import run_doctor
 from qusec.session.key_pool import KeyPool
 from qusec.session.manager import SessionManager
+from qusec.quantum.backend import get_backend, get_backend_label, normalize_backend_type
 from qusec.quantum.entanglement import EntanglementEngine
 from qusec.quantum.teleport import QuantumTeleportationEngine
 from qusec.crypto.otp import OneTimePad
@@ -27,6 +28,7 @@ __all__ = [
     "theoretical_qber",
     "TwoBasisQBEREstimator",
     "ThresholdEngine",
+    "DynamicThresholdEngine",
     "QuantumDigitalSignature",
     "QuSecNode",
     "QuantumChannel",
@@ -34,6 +36,9 @@ __all__ = [
     "RandomSource",
     "KeyPool",
     "SessionManager",
+    "get_backend",
+    "get_backend_label",
+    "normalize_backend_type",
     "EntanglementEngine",
     "QuantumTeleportationEngine",
     "OneTimePad",

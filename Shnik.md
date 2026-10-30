@@ -1,7 +1,7 @@
 # 🌐 Shnik — Quantum-Secured Social Messaging Platform
 ### Connected with QuSec (Real-World Quantum Cyber-Threat Detection Framework)
 
-[![QuSec Version](https://img.shields.io/badge/QuSec-v0.2.3-00e5ff?style=flat-square)](https://pypi.org/project/qusec/)
+[![QuSec Version](https://img.shields.io/badge/QuSec-v0.2.4-00e5ff?style=flat-square)](https://pypi.org/project/qusec/)
 [![Website](https://img.shields.io/badge/Live_App-shnik--lake.vercel.app-00e676?style=flat-square)](https://shnik-lake.vercel.app)
 [![Protocol](https://img.shields.io/badge/Security-Teleportation_%2B_SARG04-ff0055?style=flat-square)](#-quantum-security-architecture)
 [![Hardware](https://img.shields.io/badge/Hardware-Optical_Fibre_%2B_ESP32-ffab00?style=flat-square)](#-hardware-setup--deployment-modes)
@@ -98,34 +98,48 @@ Because **Shnik** is deployed on secure HTTPS ([https://shnik-lake.vercel.app](h
 
 Follow these 3 simple steps to link Shnik with your terminal:
 
-### Step 1: Start the QuSec Bridge in Your Terminal
+### Step 1: Start the QuSec Bridge in Your Terminal (Dual-Mode Full Duplex)
 
 > **Note:** You do **not** type messages into the terminal!  
-> The terminal acts as a **Live Transmission Monitor** that displays real-time quantum telemetry, qubit counts, public/private key fingerprints, and threat verification reports. Messages are sent directly from the **[Shnik Website](https://shnik-lake.vercel.app)** or via CLI commands like `qusec send`.
+> The terminal acts as a **Live Transmission Monitor** that displays real-time quantum telemetry, qubit counts, public/private key fingerprints, auto-adjusted QBER thresholds, and threat verification reports. Messages are sent directly from the **[Shnik Website](https://shnik-lake.vercel.app)**.
 
-Open your terminal and run:
+#### Terminal Command with 3 Backend Options
+The `--backend` flag allows you to choose from 3 quantum execution backends:
+1. `1` or `aer` : **AerSimulator** (Ideal Qiskit Aer simulation)
+2. `2` or `noisy`: **Noisy AerSimulator** (Calibrated fiber depolarizing/thermal noise model)
+3. `3` or `hardware`: **Quantum Hardware** (Real IBM Quantum Cloud QPUs via `qiskit-ibm-runtime`)
 
+#### Across Two Physical Laptops (Laptop A ⇄ Laptop B):
 ```bash
-# Real hardware mode (Optical Media Converters + ESP32):
-qusec bridge --role sender --peer-host 192.168.2.2
+# On Laptop A (e.g. IP 192.168.1.10):
+qusec bridge --peer-host 192.168.1.20 --role dual --backend 1
 
-# Single-machine simulation mode:
-qusec bridge --role sender --sim
+# On Laptop B (e.g. IP 192.168.1.20):
+qusec bridge --peer-host 192.168.1.10 --role dual --backend 1
 ```
 
-*(On the receiver laptop or second terminal, run `qusec bridge --role receiver --peer-host 192.168.2.1` or `qusec bridge --role receiver --sim --port 8766`).*
+#### On a Single Laptop (Simulation Testing via 2 Terminals):
+```bash
+# Terminal 1 (Peer A - Gateway Port 8765, Optical 9876, Classical 9877):
+qusec bridge --peer a --backend 1
+
+# Terminal 2 (Peer B - Gateway Port 8766, Optical 9878, Classical 9879):
+qusec bridge --peer b --backend 1
+```
 
 You will see the live QuSec Transmission Monitor banner:
 ```text
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║    QuSec Quantum Transport & Shnik Web Bridge · [SENDER]                     ║
+║    QuSec Quantum Transport & Shnik Web Bridge · [PEER A] (DUAL-MODE)        ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
  • Hardware Classical Link (ESP32): ONLINE (ESP32 Hardware Connected)
  • Hardware Quantum Link (Optical): ONLINE (Glass Fibre Connected)
- • Node Role:                      Sender (Peer: Receiver)
- • Quantum Public Key:             Q-PK-SENDER-A41B-97E2-6C81-5401
- • Quantum Private Key:            Q-SK-SENDER-A41B-97E2-6C81-5401 [Secured in Memory]
- • Peer Quantum Public Key:        Q-PK-RECV-7E43-1289-54AA-19BF
+ • Node Role:                      Peer A [Dual-Mode Bidirectional Full-Duplex]
+ • Quantum Execution Backend:      AerSimulator (Ideal Quantum State Simulator)
+ • Quantum Public Key:             Q-PK-PEER-A-A41B-97E2-6C81-5401
+ • Quantum Private Key:            Q-SK-PEER-A-A41B-97E2-6C81-5401 [Secured in Memory]
+ • Peer Quantum Public Key:        Q-PK-PEER-B-7E43-1289-54AA-19BF
+ • Dynamic Threshold Engine:       Active (Raman Traffic & Finite-Key Adapted)
  • Platform Gateway Server:        http://0.0.0.0:8765
  • Connected Web Application:      https://shnik-lake.vercel.app
  • Active Key Pool:                4,820 bits
@@ -156,45 +170,62 @@ By default, Google Chrome, Brave, and Microsoft Edge block public HTTPS pages fr
 
 ---
 
-### Step 3: Transmit Messages & View Live Terminal Stream
+### Step 3: Transmit Messages & View Live Terminal Stream (Bidirectional Chat)
 
-After reloading:
-- The top-right status badge in Shnik will illuminate **GREEN**:
-  ```text
-  ● QuSec Node Online | Quantum Fibre: Connected | ESP32: Active
-  ```
-- Send any message from the **Shnik Website** ([shnik-lake.vercel.app](https://shnik-lake.vercel.app)).
-- The sender terminal instantly renders the **Outgoing Quantum Transmission** report:
-  ```text
-  ══ 🚀 QUSEC OUTGOING QUANTUM TRANSMISSION ══
-  ┌──────────────────────────────┬───────────────────────────────────────────────┐
-  │ Parameter                    │ Value / Measurement                           │
-  ├──────────────────────────────┼───────────────────────────────────────────────┤
-  │ Session ID                   │ a91f                                          │
-  │ Transmission Direction       │ Sender ➔ Receiver                             │
-  │ Plaintext Message            │ "Hello from Shnik!"                           │
-  │ Receiver Quantum Public Key  │ Q-PK-RECV-7E43-1289-54AA-19BF (Encrypted)     │
-  │ Sender Quantum Private Key   │ Q-SK-SENDER-A41B-97E2-6C81-5401 (QDS Signed)  │
-  │ Optical Channel (Fibre)      │ 248 Qubits Dispatched (Port 9876)             │
-  │ ESP32 Classical Channel      │ Pauli bits X=120, Z=128 & MAC (Port 9877)     │
-  │ Channel Status               │ Active (Photons Crossing Glass Fibre)         │
-  └──────────────────────────────┴───────────────────────────────────────────────┘
-  ```
-- The receiver terminal instantly decrypts the message with its **Quantum Private Key**, verifies the **Sender Quantum Public Key**, and renders the **Quantum Security Report**:
-  ```text
-  ══ QUSEC QUANTUM SECURITY REPORT ══
-  ┌──────────────────────────────┬───────────────────────────────────────────────┐
-  │ Parameter                    │ Value / Measurement                           │
-  ├──────────────────────────────┼───────────────────────────────────────────────┤
-  │ Session ID                   │ a91f                                          │
-  │ Receiver Quantum Private Key │ Q-SK-RECV-7E43-1289-54AA-19BF (Decrypted)     │
-  │ Sender Quantum Public Key    │ Q-PK-SENDER-A41B-97E2-6C81-5401 (Verified)    │
-  │ Quantum Digital Signature    │ VERIFIED (Cryptographic Non-Repudiation)      │
-  │ Decrypted Message Plaintext  │ "Hello from Shnik!"                           │
-  │ Calculated QBER              │ 0.00% (Threshold: 6.00%)                      │
-  │ Hardware Threat Alarm        │ CLEAR (ESP32 Second LED OFF)                  │
-  └──────────────────────────────┴───────────────────────────────────────────────┘
-  ```
+After reloading the page, the top status badge will illuminate **GREEN**:
+```text
+● QuSec Node Online | Quantum Fibre: Connected | ESP32: Active
+```
+
+#### Dual-Mode Chatting Sequence:
+1. **On Laptop A**: User opens [https://shnik-lake.vercel.app](https://shnik-lake.vercel.app) and types `"hello"`.
+   - **Laptop A Terminal**: Renders the **Outgoing Quantum Transmission** table:
+     ```text
+     ══ 🚀 QUSEC OUTGOING QUANTUM TRANSMISSION ══
+     ┌──────────────────────────────┬───────────────────────────────────────────────┐
+     │ Parameter                    │ Value / Measurement                           │
+     ├──────────────────────────────┼───────────────────────────────────────────────┤
+     │ Session ID                   │ 53a1                                          │
+     │ Transmission Direction       │ Peer A ➔ Peer B [Bidirectional Dual Mode]     │
+     │ Execution Backend            │ AerSimulator (Ideal Quantum State Simulator)  │
+     │ Plaintext Message            │ "hello"                                       │
+     │ Receiver Quantum Public Key  │ Q-PK-PEER-B-839C-D1AB (Encrypted Payload)     │
+     │ Sender Quantum Private Key   │ Q-SK-PEER-A-3C5B-8E7E (QDS Digital Signature) │
+     │ Optical Channel (Fibre)      │ 120 Qubits Dispatched (Port 9876)             │
+     │ ESP32 Classical Channel      │ Pauli bits X=46, Z=54 & MAC (Port 9877)       │
+     │ Live Channel Traffic (Φ)     │ 0.10 msgs/sec (Sliding Window)                │
+     │ Auto-Adjusted Q_th           │ 5.18% (Traffic & Message Adapted)             │
+     │ Channel Status               │ Active (Photons Crossing Glass Fibre)         │
+     └──────────────────────────────┴───────────────────────────────────────────────┘
+     ```
+   - **Laptop B Shnik Website**: Displays the message `"hello"`.
+   - **Laptop B Terminal**: Instantly decrypts via Quantum Private Key, validates QDS signature, evaluates the dynamic QBER threshold, and displays the **Quantum Security Report**:
+     ```text
+     ══ QUSEC QUANTUM SECURITY REPORT ══
+     ┌──────────────────────────────┬───────────────────────────────────────────────┐
+     │ Parameter                    │ Value / Measurement                           │
+     ├──────────────────────────────┼───────────────────────────────────────────────┤
+     │ Session ID                   │ 53a1                                          │
+     │ Transmission Link            │ Peer A ➔ Peer B [Bidirectional Dual Mode]     │
+     │ Execution Backend            │ AerSimulator (Ideal Quantum State Simulator)  │
+     │ Receiver Quantum Private Key │ Q-SK-PEER-B-839C-D1AB (Decrypted Plaintext)   │
+     │ Sender Quantum Public Key    │ Q-PK-PEER-A-3C5B-8E7E (Verified Signature)    │
+     │ Quantum Digital Signature    │ VERIFIED (Cryptographic Non-Repudiation)      │
+     │ Decrypted Message Plaintext  │ "hello"                                       │
+     │ Calculated QBER (Q_meas)     │ 0.0000 (0.00%)                                │
+     │ Hoeffding Margin (ε, δ=10⁻³) │ 0.3295 (32.95%) [99.9% Confidence]            │
+     │ Auto-Adjusted Q_th           │ 0.1045 (10.45%) [Q0=1.0% + Traffic Δ + Stat Δ]│
+     │ Live Channel Traffic (Φ)     │ 0.20 msgs/sec (Raman Scattering Noise Adapt)  │
+     │ Threshold Status             │ NORMAL (Within Dynamic Tolerance)             │
+     │ Hardware Threat Alarm        │ CLEAR (ESP32 Second LED OFF)                  │
+     └──────────────────────────────┴───────────────────────────────────────────────┘
+     FINAL DECISION: VERIFIED
+     ```
+
+2. **On Laptop B**: User opens [https://shnik-lake.vercel.app](https://shnik-lake.vercel.app) and replies `"i am fine"`.
+   - **Laptop B Terminal**: Renders the Outgoing Quantum Transmission report showing Peer B ➔ Peer A.
+   - **Laptop A Shnik Website**: Displays the incoming message `"i am fine"`.
+   - **Laptop A Terminal**: Renders the live QuSec Quantum Security Report confirming verification of Peer B's transmission!
 
 > **💡 Zero-Configuration Alternative (Built-in Local Web Chat):**  
 > If you prefer not to change browser permissions, open the locally hosted web chat served directly by your QuSec node:  
@@ -488,6 +519,33 @@ async function handleSend() {
      - ESP32 Second LED starts blinking rapidly (Threat Alarm).
      - Status badge turns RED on Shnik.
   5. Plug the cable back in — the carrier watchdog restores the link to GREEN within 1.2 seconds!
+
+---
+
+## 📐 Mathematical Dynamic QBER Thresholding & Decision Theory
+
+Shnik and QuSec evaluate quantum threat levels using composable mathematical bounds rather than static heuristics:
+
+### 1. Composite Dynamic Threshold Formula
+$$Q_{\text{th\_dyn}}(n, \Phi) = \min\left(0.110, \; \max\left(0.035, \; \bar{Q}_{\text{ema}} + \alpha_{\text{traffic}} \ln\left(1 + \frac{\Phi}{\Phi_{\text{ref}}}\right) + \beta_{\text{stat}} \sqrt{\frac{\ln(2/\delta)}{2n}}\right)\right)$$
+
+- **Spontaneous Raman Scattering (SpRS) Traffic Penalty**: $\Delta_{\text{traffic}}(\Phi) = \alpha_{\text{traffic}} \ln(1 + \Phi / \Phi_{\text{ref}})$ models the photon noise generated in optical fiber by co-propagating classical frames (*Patel et al., PRX 2012*). When social chat traffic spikes, $Q_{\text{th}}$ expands proportionally to prevent false threat alarms.
+- **Finite-Key Statistical Hoeffding Bound**: $\Delta_{\text{stat}}(n) = \beta_{\text{stat}} \sqrt{\frac{\ln(2/\delta)}{2n}}$ accounts for finite sample deviations at $99.9\%$ confidence ($\delta = 10^{-3}$) (*Tomamichel et al., Nat. Commun. 2012*). Brief chat messages have higher statistical variance, dynamically widening the threshold.
+- **Asymptotic Security Ceiling ($Q_{\text{ceiling}} = 11.0\%$)**: Mutual information between communicating peers collapses when error rate exceeds $11.0\%$ (*Scarani et al., Rev. Mod. Phys. 2009*). No traffic spike or message size can ever allow a threshold exceeding $11\%$.
+- **Pauli Corrections**: Qubits teleported across the optical channel are reconstructed using conditional classical operators $Z^{c_0} X^{c_1}$ (*Bennett et al., PRL 1993*).
+
+---
+
+## 📚 Academic Research References
+
+1. **Patel, K. A., et al.** (2012). *Coexistence of high-bit-rate quantum key distribution and data on optical fiber*. **Physical Review X**, 2(4), 041010. [DOI: 10.1103/PhysRevX.2.041010](https://doi.org/10.1103/PhysRevX.2.041010)
+2. **Eraerds, P., et al.** (2010). *Quantum key distribution and 1 Gbps data coexistence in a single fiber*. **New Journal of Physics**, 12(6), 063027. [DOI: 10.1088/1367-2630/12/6/063027](https://doi.org/10.1088/1367-2630/12/6/063027)
+3. **Tomamichel, M., et al.** (2012). *Tight finite-key analysis for quantum cryptography*. **Nature Communications**, 3, 634. [DOI: 10.1038/ncomms1631](https://doi.org/10.1038/ncomms1631)
+4. **Scarani, V., et al.** (2009). *The security of practical quantum key distribution*. **Reviews of Modern Physics**, 81(3), 1301–1350. [DOI: 10.1103/RevModPhys.81.1301](https://doi.org/10.1103/RevModPhys.81.1301)
+5. **Bennett, C. H., et al.** (1993). *Teleporting an unknown quantum state via dual classical and Einstein-Podolsky-Rosen channels*. **Physical Review Letters**, 70(13), 1895–1899. [DOI: 10.1103/PhysRevLett.70.1895](https://doi.org/10.1103/PhysRevLett.70.1895)
+6. **Gottesman, D., & Chuang, I. L.** (2001). *Quantum digital signatures*. **arXiv:quant-ph/0105032**. [arXiv:quant-ph/0105032](https://arxiv.org/abs/quant-ph/0105032)
+7. **Shor, P. W., & Preskill, J.** (2000). *Simple proof of security of the BB84 quantum key distribution protocol*. **Physical Review Letters**, 85(2), 441–444. [DOI: 10.1103/PhysRevLett.85.441](https://doi.org/10.1103/PhysRevLett.85.441)
+8. **Wegman, M. N., & Carter, J. L.** (1981). *New hash functions and their use in authentication and set equality*. **Journal of Computer and System Sciences**, 22(3), 265–279. [DOI: 10.1016/0022-0000(81)90033-7](https://doi.org/10.1016/0022-0000(81)90033-7)
 
 ---
 

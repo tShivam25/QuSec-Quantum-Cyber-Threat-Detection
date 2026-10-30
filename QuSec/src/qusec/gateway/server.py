@@ -106,6 +106,9 @@ class GatewayContext:
         send_message_fn: Optional[Any] = None,
         rekey_fn: Optional[Any] = None,
         init_session_fn: Optional[Any] = None,
+        backend_name: str = "AerSimulator (Ideal Quantum State Simulator)",
+        backend_type: str = "simulator",
+        threshold_engine: Optional[Any] = None,
     ):
         self.node_role = "sender" if node_role.lower() in ("alice", "sender") else "receiver"
         self.session_mgr = session_mgr or SessionManager(role=self.node_role)
@@ -114,6 +117,9 @@ class GatewayContext:
         self.send_message_fn = send_message_fn
         self.rekey_fn = rekey_fn
         self.init_session_fn = init_session_fn
+        self.backend_name = backend_name
+        self.backend_type = backend_type
+        self.threshold_engine = threshold_engine
         self.received_messages: List[Dict[str, Any]] = []
         self.pipeline_state = {
             "encode": "DONE",
@@ -275,10 +281,22 @@ def make_gateway_handler(context: GatewayContext):
                 peer_title = "Receiver" if role_title == "Sender" else "Sender"
                 session_ready = context.session_mgr.state == "ESTABLISHED"
                 peer_pk = context.session_mgr.get_peer_quantum_public_key()
+                traffic_rate = context.threshold_engine.get_traffic_rate() if context.threshold_engine else 0.0
+                curr_q_th = context.threshold_engine.q_threshold if context.threshold_engine else 0.06
                 data = {
                     "status": "ONLINE",
                     "role": role_title,
                     "peer_role": peer_title,
+                    "channel_mode": "dual-mode (bidirectional full-duplex)",
+                    "backend": context.backend_name,
+                    "backend_type": context.backend_type,
+                    "dynamic_threshold": {
+                        "q_threshold": curr_q_th,
+                        "traffic_rate_msgs_per_sec": traffic_rate,
+                        "auto_adjusting": True,
+                        "formula": "Q_th(n, Phi) = min(0.110, max(0.035, Q_ema + Delta_traffic(Phi) + Delta_stat(n)))",
+                        "status": "ACTIVE (Auto-Adjusts for Message Length, Traffic & Drift)",
+                    },
                     "session_id": context.session_mgr.session_id or "idle",
                     "session_established": session_ready,
                     "quantum_public_key": context.session_mgr.keypair.public_key.fingerprint,
