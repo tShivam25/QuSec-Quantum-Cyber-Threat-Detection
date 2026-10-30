@@ -153,6 +153,23 @@ class ESP32Device:
         res = self.send_command(f"SET_ROLE {role.upper()}")
         return bool(res and isinstance(res, dict) and res.get("status") == "OK")
 
+    def read_incoming_packet(self) -> Optional[bytes]:
+        """Check serial buffer for classical packets forwarded from ESP32 Wi-Fi ('RX <data>')."""
+        if not self.is_connected or not self._serial:
+            return None
+        try:
+            if getattr(self._serial, "in_waiting", 0) > 0:
+                line = self._serial.readline().decode("utf-8", errors="replace").strip()
+                if line.startswith("RX "):
+                    raw_data = line[3:].strip()
+                    try:
+                        return bytes.fromhex(raw_data)
+                    except ValueError:
+                        return raw_data.encode("utf-8")
+        except Exception as e:
+            logger.debug("ESP32 read packet exception: %s", e)
+        return None
+
 
 class ESP32Detector:
     """Scans system serial interfaces to auto-detect attached ESP32 boards."""

@@ -335,14 +335,42 @@ qusec send "Hello Quantum Teleportation" --to receiver --mode teleportation --ba
 qusec send "Top Secret" --to receiver --mode otp
 ```
 
+### 8. QuSec Attacker & Claude Code TUI Adversary (`qusec attacker`)
+Run the adversary console (Eve) on the 3rd laptop connected to the Attacker ESP32:
+```bash
+# Interactive Claude Code TUI session:
+qusec attacker --target-host <RECEIVER_IP>
+
+# Direct attack vector (non-interactive):
+qusec attacker --sim --attack tamper --rate 0.35
+
+# Dedicated standalone executable:
+qusec-attacker --random
+```
+Interactive Slash Commands in Attacker TUI:
+- `/attack <qber|tamper|forgery|replay|jam>` — Launch targeted disturbance or corruption
+- `/random <on|off> [min_sec] [max_sec]` — Automated random in-between chat attack mode
+- `/mitm <start|stop>` — Transparent hardware/socket proxy with live packet sniffing
+- `/target <ip> [classical_port] [optical_port]` — Set target laptop coordinates
+- `/stats` — Display injected packets and active telemetry
+- `/help` — View adversary manual
+
 ---
 
 ## ⚡ ESP32 Firmware
 
-The ready-to-flash Arduino C++ firmware is provided in:
-`firmware/esp32_qusec/esp32_qusec.ino`
-
+### 1. Classical Relay & Endpoint Firmware
+Provided in: `firmware/esp32_qusec/esp32_qusec.ino`
 - True Hardware RNG via `esp_random()`
 - Wi-Fi Access Point / Station Classical Relay (Port `9877`)
 - Threat Alarm LED Driver on GPIO 4
 - Serial protocol interface at `115200` baud
+
+### 2. Attacker ESP32 Firmware (Eve)
+Provided in: `firmware/esp32_attacker/esp32_attacker.ino`
+- True Hardware RNG via `esp_random()` (`RNG <bytes>`)
+- Promiscuous Mode Wi-Fi Packet Sniffer (`SNIFF 1/0`)
+- Raw Frame Injection across classical & optical networks (`TX <hex>`)
+- High-frequency RF/UDP Jamming bursts (`JAM <count> <delay>`)
+- Attack Blast LED on GPIO 4 (`ALARM 1/0 [blink_ms]`)
+

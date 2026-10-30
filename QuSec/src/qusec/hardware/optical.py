@@ -380,6 +380,10 @@ class QuantumChannel:
             return False
 
         t0 = time.time()
+        # Embed sender's optical port so peer can auto-discover return route
+        if isinstance(payload, dict) and "sender_optical_port" not in payload:
+            payload["sender_optical_port"] = self.local_port
+
         packet = {
             "channel": "quantum_optical",
             "type": frame_type,
@@ -400,7 +404,7 @@ class QuantumChannel:
             return False
 
     def receive_quantum_frame(self, timeout: float = 0.5) -> Optional[Dict[str, Any]]:
-        """Listen for an incoming quantum frame on the optical channel."""
+        """Listen for an incoming quantum frame on the optical channel and auto-learn peer parameters."""
         if not self.is_open or not self._sock:
             return None
 
@@ -412,6 +416,20 @@ class QuantumChannel:
             packet = json.loads(data.decode("utf-8"))
             if "ts" in packet:
                 self.stats["last_latency_ms"] = (time.time() - packet["ts"]) * 1000.0
+
+            # Dynamic Peer Learning: Auto-learn peer host and port from incoming optical frames
+            if addr and addr[0] not in ("0.0.0.0",):
+                src_ip = addr[0]
+                if src_ip != "127.0.0.1" and self.peer_host in ("127.0.0.1", "0.0.0.0", "localhost"):
+                    self.peer_host = src_ip
+                    logger.info("QuantumChannel dynamic peer host learned: %s", self.peer_host)
+
+            p_load = packet.get("payload", {})
+            if isinstance(p_load, dict) and p_load.get("sender_optical_port"):
+                learned_port = int(p_load["sender_optical_port"])
+                if learned_port != self.local_port:
+                    self.peer_port = learned_port
+
             return packet
         except socket.timeout:
             return None

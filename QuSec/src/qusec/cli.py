@@ -143,31 +143,45 @@ def _resolve_peer_config(args):
     gateway_port = getattr(args, "port", None) or getattr(args, "gateway_port", None)
     optical_port = getattr(args, "optical_port", None)
     classical_port = getattr(args, "classical_port", None)
+    peer_optical_port = getattr(args, "peer_optical_port", None)
+    peer_classical_port = getattr(args, "peer_classical_port", None)
 
-    if peer:
-        p_str = str(peer).strip().lower()
-        if p_str in ("b", "2", "peer_b", "bob"):
-            role = "peer_b"
-            gateway_port = gateway_port or 8766
-            optical_port = optical_port or 9878
-            classical_port = classical_port or 9879
-        else:
-            role = "peer_a"
-            gateway_port = gateway_port or 8765
-            optical_port = optical_port or 9876
-            classical_port = classical_port or 9877
+    p_str = str(peer).strip().lower() if peer else ""
+    r_str = str(role).strip().lower() if role else ""
+
+    if p_str in ("b", "2", "peer_b", "bob") or r_str in ("receiver", "bob", "peer_b"):
+        role = "peer_b"
+        gateway_port = gateway_port or 8766
+        optical_port = optical_port or 9878
+        classical_port = classical_port or 9879
+        peer_optical_port = peer_optical_port or 9876
+        peer_classical_port = peer_classical_port or 9877
+    elif p_str in ("a", "1", "peer_a", "alice") or r_str in ("sender", "alice", "peer_a"):
+        role = "peer_a"
+        gateway_port = gateway_port or 8765
+        optical_port = optical_port or 9876
+        classical_port = classical_port or 9877
+        peer_optical_port = peer_optical_port or 9878
+        peer_classical_port = peer_classical_port or 9879
+    else:  # dual / peer default
+        role = "dual"
+        gateway_port = gateway_port or 8765
+        optical_port = optical_port or 9876
+        classical_port = classical_port or 9877
+        peer_optical_port = peer_optical_port or 9878
+        peer_classical_port = peer_classical_port or 9879
 
     backend_type = getattr(args, "backend", "aer")
     ibm_token = getattr(args, "ibm_token", None)
     if ibm_token:
         os.environ["IBM_QUANTUM_TOKEN"] = ibm_token
 
-    return role, gateway_port, optical_port, classical_port, backend_type
+    return role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type
 
 
 def cmd_node(args):
     """Handle 'qusec node' command."""
-    role, gateway_port, optical_port, classical_port, backend_type = _resolve_peer_config(args)
+    role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type = _resolve_peer_config(args)
     force_sim = getattr(args, "sim", False)
     duration = getattr(args, "duration", None)
     esp32_port = getattr(args, "esp32_port", None)
@@ -179,6 +193,8 @@ def cmd_node(args):
         optical_port=optical_port,
         classical_port=classical_port,
         gateway_port=gateway_port,
+        peer_optical_port=peer_optical_port,
+        peer_classical_port=peer_classical_port,
         esp32_port=esp32_port,
         force_simulation=force_sim,
         backend_type=backend_type,
@@ -189,7 +205,7 @@ def cmd_node(args):
 
 def cmd_gateway(args):
     """Handle 'qusec gateway' and 'qusec bridge' command - Live Transmission Monitor."""
-    role, gateway_port, optical_port, classical_port, backend_type = _resolve_peer_config(args)
+    role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type = _resolve_peer_config(args)
     force_sim = getattr(args, "sim", False)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
     esp32_port = getattr(args, "esp32_port", None)
@@ -200,6 +216,8 @@ def cmd_gateway(args):
         optical_port=optical_port,
         classical_port=classical_port,
         gateway_port=gateway_port,
+        peer_optical_port=peer_optical_port,
+        peer_classical_port=peer_classical_port,
         esp32_port=esp32_port,
         force_simulation=force_sim,
         backend_type=backend_type,
@@ -210,7 +228,7 @@ def cmd_gateway(args):
 
 def cmd_chat(args):
     """Handle 'qusec chat' command - continuous interactive quantum chat or transmission monitor."""
-    role, gateway_port, optical_port, classical_port, backend_type = _resolve_peer_config(args)
+    role, gateway_port, optical_port, classical_port, peer_optical_port, peer_classical_port, backend_type = _resolve_peer_config(args)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
     force_sim = getattr(args, "sim", False)
     esp32_port = getattr(args, "esp32_port", None)
@@ -222,6 +240,8 @@ def cmd_chat(args):
         optical_port=optical_port,
         classical_port=classical_port,
         gateway_port=gateway_port,
+        peer_optical_port=peer_optical_port,
+        peer_classical_port=peer_classical_port,
         esp32_port=esp32_port,
         force_simulation=force_sim,
         backend_type=backend_type,
@@ -230,6 +250,49 @@ def cmd_chat(args):
         node.run_transmission_monitor()
     else:
         node.run_interactive_chat()
+    return 0
+
+
+def cmd_attack(args):
+    """Handle 'qusec attacker' / 'qusec attack' command - Claude Code TUI Adversary."""
+    from qusec.attacker import QuSecAttacker
+    target_host = getattr(args, "target_host", "127.0.0.1")
+    target_classical_port = getattr(args, "target_classical_port", 9877)
+    target_optical_port = getattr(args, "target_optical_port", 9876)
+    esp32_port = getattr(args, "esp32_port", None)
+    force_sim = getattr(args, "sim", False)
+    vector = getattr(args, "vector", None) or getattr(args, "attack", None)
+    msg = getattr(args, "message", "Quantum attack simulation")
+    rate = getattr(args, "rate", 0.35)
+
+    attacker = QuSecAttacker(
+        target_host=target_host,
+        target_classical_port=target_classical_port,
+        target_optical_port=target_optical_port,
+        esp32_port=esp32_port,
+        force_simulation=force_sim,
+    )
+
+    if vector:
+        if vector in ("tamper", "intercept_resend"):
+            res = attacker.inject_qber_disturbance(message=msg, disturbance_rate=rate)
+            print(json.dumps(res, indent=2))
+        elif vector == "pauli":
+            res = attacker.inject_pauli_tampering(message=msg, flip_ratio=rate)
+            print(json.dumps(res, indent=2))
+        elif vector == "forge":
+            res = attacker.inject_forgery(fake_message=msg)
+            print(json.dumps(res, indent=2))
+        elif vector == "replay":
+            res = attacker.inject_replay()
+            print(json.dumps(res, indent=2))
+        elif vector == "jam":
+            res = attacker.inject_jamming_burst(packet_count=20)
+            print(json.dumps(res, indent=2))
+        attacker.close()
+        return 0
+
+    attacker.run_interactive()
     return 0
 
 
@@ -338,7 +401,18 @@ def main():
     run_parser.add_argument("--debug", action="store_true", help="Enable debug output")
     run_parser.add_argument("--json", action="store_true", help="Output results in JSON format")
 
-    # 7. qusec version
+    # 8. qusec attacker (Claude Code TUI Adversary)
+    atk_parser = subparsers.add_parser("attacker", aliases=["attack"], help="Launch QuSec Attacker (Eve) with Claude Code TUI")
+    atk_parser.add_argument("--target-host", default="127.0.0.1", help="Target Receiver IP (default: 127.0.0.1 or 192.168.4.2)")
+    atk_parser.add_argument("--target-classical-port", type=int, default=9877, help="Target classical UDP port (default: 9877, or 9879 for Bob)")
+    atk_parser.add_argument("--target-optical-port", type=int, default=9876, help="Target optical UDP port (default: 9876, or 9878 for Bob)")
+    atk_parser.add_argument("--esp32-port", default=None, help="Attacker ESP32 serial port (e.g. COM5 or /dev/ttyUSB*)")
+    atk_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
+    atk_parser.add_argument("--vector", "--attack", choices=["tamper", "intercept_resend", "pauli", "forge", "replay", "jam"], default=None, help="Direct attack vector")
+    atk_parser.add_argument("--message", default="Quantum attack simulation", help="Message payload")
+    atk_parser.add_argument("--rate", type=float, default=0.35, help="Disturbance / error rate (default: 0.35)")
+
+    # 9. qusec version
     subparsers.add_parser("version", help="Print version information")
 
     args = parser.parse_args()
@@ -356,6 +430,8 @@ def main():
     if args.command in ("gateway", "bridge"):
         return cmd_gateway(args)
 
+    if args.command in ("attacker", "attack"):
+        return cmd_attack(args)
 
     if args.command == "keys":
         return cmd_keys(args)

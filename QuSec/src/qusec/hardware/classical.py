@@ -106,6 +106,10 @@ class ClassicalChannel:
             return False
 
         t0 = time.time()
+        # Embed sender's classical port so peer can auto-discover return route
+        if isinstance(payload, dict) and "sender_classical_port" not in payload:
+            payload["sender_classical_port"] = self.local_port
+
         packet = {
             "channel": "classical_esp32",
             "type": msg_type,
@@ -131,7 +135,24 @@ class ClassicalChannel:
             return False
 
     def receive_classical(self, timeout: float = 0.5) -> Optional[Dict[str, Any]]:
-        """Receive a classical message packet."""
+        """
+        Receive a classical message packet.
+        Checks both physical ESP32 serial bridge (Wi-Fi relay) and UDP socket.
+        Dynamically learns peer IP and port from incoming traffic.
+        """
+        # 1. Check physical ESP32 Wi-Fi serial relay first if attached
+        if self.esp32 and self.esp32.is_connected:
+            esp_data = self.esp32.read_incoming_packet()
+            if esp_data:
+                try:
+                    packet = json.loads(esp_data.decode("utf-8"))
+                    self.stats["messages_received"] += 1
+                    self.stats["bytes_received"] += len(esp_data)
+                    return packet
+                except Exception:
+                    pass
+
+        # 2. Check classical UDP socket
         if not self.is_open or not self._sock:
             return None
 
@@ -143,6 +164,20 @@ class ClassicalChannel:
             packet = json.loads(data.decode("utf-8"))
             if "ts" in packet:
                 self.stats["last_latency_ms"] = (time.time() - packet["ts"]) * 1000.0
+
+            # Dynamic Peer Learning: Auto-learn peer host and port from incoming packets
+            if addr and addr[0] not in ("0.0.0.0",):
+                src_ip = addr[0]
+                if src_ip != "127.0.0.1" and self.peer_host in ("127.0.0.1", "0.0.0.0", "localhost"):
+                    self.peer_host = src_ip
+                    logger.info("ClassicalChannel dynamic peer host learned: %s", self.peer_host)
+
+            p_load = packet.get("payload", {})
+            if isinstance(p_load, dict) and p_load.get("sender_classical_port"):
+                learned_port = int(p_load["sender_classical_port"])
+                if learned_port != self.local_port:
+                    self.peer_port = learned_port
+
             return packet
         except socket.timeout:
             return None

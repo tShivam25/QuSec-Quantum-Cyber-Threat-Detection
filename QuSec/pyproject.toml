@@ -42,6 +42,7 @@ hardware = [
 
 [project.scripts]
 qusec = "qusec.cli:main"
+qusec-attacker = "qusec.attacker:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

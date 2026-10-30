@@ -111,7 +111,7 @@ class QuSecNode:
 
         # Smart port configuration:
         # If running locally on localhost, assign non-colliding default ports;
-        # if running on separate physical laptops across network, use identical standard ports.
+        # if running on separate physical laptops across network, use symmetric role ports.
         is_local = self.peer_host in ("127.0.0.1", "localhost")
         if is_local:
             if self.role == "sender":
@@ -127,11 +127,18 @@ class QuSecNode:
                 self.peer_classical_port = peer_classical_port or 9877
                 self.gateway_port = gateway_port or 8766
         else:
-            self.optical_port = optical_port or 9876
-            self.classical_port = classical_port or 9877
-            self.peer_optical_port = peer_optical_port or 9876
-            self.peer_classical_port = peer_classical_port or 9877
-            self.gateway_port = gateway_port or 8765
+            if self.role == "sender":
+                self.optical_port = optical_port or 9876
+                self.classical_port = classical_port or 9877
+                self.peer_optical_port = peer_optical_port or (9878 if optical_port == 9876 else 9876)
+                self.peer_classical_port = peer_classical_port or (9879 if classical_port == 9877 else 9877)
+                self.gateway_port = gateway_port or 8765
+            else:
+                self.optical_port = optical_port or 9878
+                self.classical_port = classical_port or 9879
+                self.peer_optical_port = peer_optical_port or 9876
+                self.peer_classical_port = peer_classical_port or 9877
+                self.gateway_port = gateway_port or 8766
 
         # Event broadcaster
         self.events = EventEmitter()
@@ -827,6 +834,31 @@ class QuSecNode:
         color = "green" if decision == "VERIFIED" else "red"
         console.print(f"[bold {color}]FINAL DECISION: {decision}[/bold {color}]\n")
 
+        report_data = {
+            "session_id": session_id,
+            "sender": sender_name,
+            "recipient": recipient_name,
+            "total_qubits": total_qubits,
+            "pauli_x_count": pauli_x_count,
+            "pauli_z_count": pauli_z_count,
+            "conclusive_sifted": conclusive_sifted,
+            "detected_errors": detected_errors,
+            "calculated_qber": calculated_qber,
+            "threshold": threshold,
+            "hoeffding_eps": hoeffding_eps,
+            "decision": decision,
+            "threat_type": threat_type,
+            "sig_decision": sig_decision,
+            "decrypted_message": decrypted_message,
+            "dynamic_metrics": dyn_metrics or {},
+            "dynamic_threshold": dyn_metrics or {"q_threshold": threshold},
+            "timestamp": time.time(),
+        }
+        self.last_security_report = report_data
+        if hasattr(self, "gateway_ctx") and self.gateway_ctx is not None:
+            self.gateway_ctx.last_security_report = report_data
+        return report_data
+
     def _handle_incoming_classical_packet(self, packet: Dict[str, Any]):
         """Dispatch and process incoming classical packets."""
         p_type = packet.get("type")
@@ -858,10 +890,16 @@ class QuSecNode:
             if sender_pk_dict:
                 try:
                     sender_pk = QuantumPublicKey.from_dict(sender_pk_dict)
+                    self.session_mgr.peer_public_key = sender_pk
                 except Exception:
                     pass
             if not sender_pk:
                 sender_pk = self.session_mgr.get_peer_quantum_public_key()
+
+            # Synchronize peer host between classical and optical channels
+            if self.classical_channel.peer_host and self.classical_channel.peer_host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+                self.quantum_channel.peer_host = self.classical_channel.peer_host
+                self.peer_host = self.classical_channel.peer_host
 
             # Verify optical quantum burst arrival across physical fiber
             optical_burst = self._received_optical_bursts.pop(msg_id, None)
@@ -879,9 +917,12 @@ class QuSecNode:
 
             optical_missing = (optical_burst is None)
             if optical_missing:
-                # Genuine physical optical disconnect:
-                # Classical packet arrived over Wi-Fi / Serial, but NO PHOTONS arrived over optical fiber!
-                bob_qubits = [0] * len(c0_bits)
+                # If in software simulation mode or fallback bits available in payload
+                if (self.force_simulation or not self.quantum_channel.link_ok) and payload.get("bob_qubits"):
+                    bob_qubits = payload.get("bob_qubits")
+                    optical_missing = False
+                else:
+                    bob_qubits = [0] * len(c0_bits)
             else:
                 bob_qubits = optical_burst.get("bob_qubits") or payload.get("bob_qubits", [])
 
@@ -898,14 +939,19 @@ class QuSecNode:
                         enc_payload, self.session_mgr.keypair.private_key
                     )
                 except Exception as dec_err:
-                    logger.warning("Quantum private key decryption failed: %s", dec_err)
+                    logger.debug("Quantum private key decryption fallback: %s", dec_err)
 
             if not decrypted_text:
                 recovered_data_bits = recovered_bits[:data_count]
                 try:
-                    decrypted_text = bits_to_string(recovered_data_bits)
+                    candidate = bits_to_string(recovered_data_bits)
+                    if candidate and any(c.isprintable() for c in candidate):
+                        decrypted_text = candidate
                 except Exception:
-                    decrypted_text = text
+                    pass
+
+            if not decrypted_text:
+                decrypted_text = text
 
             # 3. Decrypt & Verify Quantum Digital Signature using Sender's Quantum Public Key
             sig_valid = True
@@ -1004,7 +1050,7 @@ class QuSecNode:
             )
 
             # 7. Render Full Quantum Security Report Table
-            self.render_quantum_security_report(
+            report = self.render_quantum_security_report(
                 session_id=self.session_mgr.session_id or "a91f",
                 sender_name=sender_name,
                 recipient_name=self.role_title,
@@ -1030,6 +1076,7 @@ class QuSecNode:
                 display_text = f"[BLOCKED: {decision}]"
                 record = {
                     "id": msg_id,
+                    "sender": sender_name,
                     "from": sender_name,
                     "to": self.role_title,
                     "direction": "incoming",
@@ -1041,11 +1088,13 @@ class QuSecNode:
                     "decision": decision,
                     "recipient_sk": self.session_mgr.keypair.private_key.fingerprint,
                     "sender_pk": sender_pk.fingerprint if sender_pk else "Unknown",
+                    "qusec_report": report or getattr(self, "last_security_report", None),
                 }
             else:
                 display_text = decrypted_text or text
                 record = {
                     "id": msg_id,
+                    "sender": sender_name,
                     "from": sender_name,
                     "to": self.role_title,
                     "direction": "incoming",
@@ -1057,6 +1106,7 @@ class QuSecNode:
                     "decision": decision,
                     "recipient_sk": self.session_mgr.keypair.private_key.fingerprint,
                     "sender_pk": sender_pk.fingerprint if sender_pk else "Unknown",
+                    "qusec_report": report or getattr(self, "last_security_report", None),
                 }
 
             self.received_messages.append(record)

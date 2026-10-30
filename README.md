@@ -112,13 +112,18 @@ qusec node --role sender
 qusec node --role receiver --peer-host <SENDER_IP>
 ```
 
-### Launch Social Media Platform Bridge Gateway
-Connect web applications and chat platforms to the local quantum transport:
+### Launch Attacker Console on 3rd Laptop (`qusec attacker`)
+Connect the Attacker ESP32 to the 3rd laptop and start the Claude Code styled adversary console:
 ```bash
-qusec gateway --role sender --port 8765
+# Interactive Claude Code TUI:
+qusec attacker --target-host <RECEIVER_IP>
+
+# Automated random in-between chat attacks:
+qusec attacker --target-host <RECEIVER_IP> --random
 ```
 
 For complete technical specifications, mathematical protocols (SARG04 + 3-qubit Bell teleportation), and REST API documentation, see the [QuSec Subdirectory Documentation](QuSec/README.md).
+
 
 ---
 

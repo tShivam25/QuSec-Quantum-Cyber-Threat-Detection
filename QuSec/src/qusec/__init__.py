@@ -17,8 +17,8 @@ from qusec.session.manager import SessionManager
 from qusec.quantum.backend import get_backend, get_backend_label, normalize_backend_type
 from qusec.quantum.entanglement import EntanglementEngine
 from qusec.quantum.teleport import QuantumTeleportationEngine
-from qusec.crypto.otp import OneTimePad
 from qusec.crypto.quantum_keys import QuantumKeyPair, QuantumPublicKey, QuantumPrivateKey
+from qusec.attacker import QuSecAttacker, AttackerESP32Device
 
 __all__ = [
     "bell_pair",
@@ -31,6 +31,8 @@ __all__ = [
     "DynamicThresholdEngine",
     "QuantumDigitalSignature",
     "QuSecNode",
+    "QuSecAttacker",
+    "AttackerESP32Device",
     "QuantumChannel",
     "ClassicalChannel",
     "RandomSource",
