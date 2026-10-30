@@ -11,6 +11,9 @@ import time
 import socket
 import logging
 import threading
+import hashlib
+import base64
+import struct
 from urllib.parse import urlparse, parse_qs
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Any, List
@@ -20,6 +23,59 @@ from qusec.session.key_pool import KeyPool
 from qusec.session.manager import SessionManager
 
 logger = logging.getLogger("qusec.gateway.server")
+
+
+def _send_ws_frame(sock, text: str):
+    """Encode and send RFC 6455 unmasked text frame from server to client."""
+    data = text.encode("utf-8")
+    length = len(data)
+    if length < 126:
+        header = struct.pack("!BB", 0x81, length)
+    elif length < 65536:
+        header = struct.pack("!BBH", 0x81, 126, length)
+    else:
+        header = struct.pack("!BBQ", 0x81, 127, length)
+    sock.sendall(header + data)
+
+
+def _read_ws_frame_nonblocking(sock) -> Optional[str]:
+    """Non-blocking read of RFC 6455 masked client frame."""
+    try:
+        head = sock.recv(2)
+        if not head or len(head) < 2:
+            return None
+        b1, b2 = head
+        opcode = b1 & 0x0F
+        if opcode == 0x8:  # Connection close
+            return ""
+        masked = bool(b2 & 0x80)
+        payload_len = b2 & 0x7F
+        if payload_len == 126:
+            ext = sock.recv(2)
+            if len(ext) < 2:
+                return None
+            payload_len = struct.unpack("!H", ext)[0]
+        elif payload_len == 127:
+            ext = sock.recv(8)
+            if len(ext) < 8:
+                return None
+            payload_len = struct.unpack("!Q", ext)[0]
+
+        mask = sock.recv(4) if masked else None
+        data = bytearray()
+        while len(data) < payload_len:
+            chunk = sock.recv(payload_len - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+
+        if masked and mask:
+            for i in range(len(data)):
+                data[i] ^= mask[i % 4]
+
+        return data.decode("utf-8", errors="replace")
+    except (BlockingIOError, socket.error):
+        return None
 
 
 def _find_web_file(filename: str) -> Optional[str]:
@@ -96,11 +152,124 @@ def make_gateway_handler(context: GatewayContext):
             self._send_cors_headers()
             self.end_headers()
 
+        def _handle_websocket(self):
+            key = self.headers.get("Sec-WebSocket-Key")
+            if not key:
+                self.send_error(400, "Missing Sec-WebSocket-Key")
+                return
+            guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+            accept_val = base64.b64encode(hashlib.sha1((key + guid).encode("utf-8")).digest()).decode("utf-8")
+
+            response = (
+                "HTTP/1.1 101 Switching Protocols\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Accept: {accept_val}\r\n"
+                "Access-Control-Allow-Origin: *\r\n\r\n"
+            )
+            self.connection.sendall(response.encode("utf-8"))
+
+            role_title = "Sender" if context.node_role == "sender" else "Receiver"
+            peer_title = "Receiver" if role_title == "Sender" else "Sender"
+            init_pkt = {
+                "type": "status",
+                "session_id": context.session_mgr.session_id or "qusec-node-session",
+                "role": role_title,
+                "peer_role": peer_title,
+                "key_pool": context.key_pool.get_status(),
+                "channel": {
+                    "fibre_ok": context.hardware_state["fibre_ok"],
+                    "esp32_ok": context.hardware_state["esp32_ok"],
+                    "qber": context.session_mgr.current_qber,
+                    "fidelity": context.session_mgr.current_fidelity,
+                    "chsh": context.session_mgr.current_chsh,
+                    "trusted": context.session_mgr.channel_trusted,
+                },
+            }
+            try:
+                _send_ws_frame(self.connection, json.dumps(init_pkt))
+            except Exception:
+                pass
+
+            import queue
+            event_queue = queue.Queue()
+            unsub = context.event_emitter.subscribe(lambda e: event_queue.put(e))
+
+            self.connection.setblocking(False)
+            try:
+                while True:
+                    # 1. Dispatch outgoing events from node to web client
+                    while not event_queue.empty():
+                        try:
+                            evt = event_queue.get_nowait()
+                            e_name = evt.get("event")
+                            if e_name == "message_received":
+                                m = evt.get("data", {})
+                                ws_msg = {
+                                    "type": "message",
+                                    "from": m.get("from", peer_title),
+                                    "text": m.get("text", ""),
+                                    "mode": m.get("mode", "teleportation"),
+                                    "threat": m.get("threat", False),
+                                    "decision": m.get("decision", "VERIFIED"),
+                                }
+                                _send_ws_frame(self.connection, json.dumps(ws_msg))
+                            elif e_name in ("hardware_status", "session_established"):
+                                st_pkt = {
+                                    "type": "status",
+                                    "session_id": context.session_mgr.session_id or "qusec-node-session",
+                                    "channel": {
+                                        "fibre_ok": context.hardware_state["fibre_ok"],
+                                        "esp32_ok": context.hardware_state["esp32_ok"],
+                                    },
+                                    "key_pool": context.key_pool.get_status(),
+                                }
+                                _send_ws_frame(self.connection, json.dumps(st_pkt))
+                            else:
+                                _send_ws_frame(self.connection, json.dumps(evt))
+                        except Exception:
+                            pass
+
+                    # 2. Receive incoming frames from web client
+                    try:
+                        frame = _read_ws_frame_nonblocking(self.connection)
+                        if frame == "":
+                            break
+                        if frame is not None:
+                            try:
+                                payload = json.loads(frame)
+                                action = payload.get("action") or payload.get("type")
+                                if action == "send_message" or payload.get("text"):
+                                    default_peer = "receiver" if context.node_role == "sender" else "sender"
+                                    recipient = payload.get("to") or default_peer
+                                    text = payload.get("text") or payload.get("message") or ""
+                                    mode = payload.get("mode", "teleportation")
+                                    if text and context.send_message_fn:
+                                        context.send_message_fn(recipient, text, mode)
+                                elif action in ("init_session", "init"):
+                                    if context.init_session_fn:
+                                        context.init_session_fn()
+                            except Exception:
+                                pass
+                    except (BlockingIOError, socket.error):
+                        pass
+
+                    time.sleep(0.04)
+            except Exception:
+                pass
+            finally:
+                unsub()
+
         def do_GET(self):
             parsed = urlparse(self.path)
             path = parsed.path
 
-            if path == "/api/status":
+            # Detect WebSocket upgrade request
+            if self.headers.get("Upgrade", "").lower() == "websocket" or "Sec-WebSocket-Key" in self.headers:
+                self._handle_websocket()
+                return
+
+            if path in ("/api/status", "/status"):
                 pool_status = context.key_pool.get_status()
                 role_title = "Sender" if context.node_role == "sender" else "Receiver"
                 peer_title = "Receiver" if role_title == "Sender" else "Sender"
@@ -125,13 +294,13 @@ def make_gateway_handler(context: GatewayContext):
                 }
                 self._send_json_response(200, data)
 
-            elif path == "/api/messages":
+            elif path in ("/api/messages", "/messages"):
                 self._send_json_response(200, {
                     "messages": context.received_messages[-50:],
                     "count": len(context.received_messages),
                 })
 
-            elif path == "/api/events":
+            elif path in ("/api/events", "/events"):
                 # Server-Sent Events (SSE) streaming endpoint
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -205,7 +374,7 @@ def make_gateway_handler(context: GatewayContext):
             except Exception:
                 payload = {}
 
-            if path == "/api/send":
+            if path in ("/api/send", "/send"):
                 default_peer = "receiver" if context.node_role == "sender" else "sender"
                 recipient = payload.get("to") or default_peer
                 message_text = payload.get("message") or payload.get("text") or ""
@@ -235,7 +404,7 @@ def make_gateway_handler(context: GatewayContext):
 
                 self._send_json_response(200, res)
 
-            elif path == "/api/session/init":
+            elif path in ("/api/session/init", "/session/init", "/api/init", "/init"):
                 if context.init_session_fn:
                     s_id = context.init_session_fn()
                 else:
@@ -253,7 +422,7 @@ def make_gateway_handler(context: GatewayContext):
                     "state": context.session_mgr.state,
                 })
 
-            elif path == "/api/rekey":
+            elif path in ("/api/rekey", "/rekey"):
                 if context.rekey_fn:
                     added_bits = context.rekey_fn()
                 else:

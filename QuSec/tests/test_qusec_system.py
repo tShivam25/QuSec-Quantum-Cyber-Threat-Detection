@@ -9,6 +9,7 @@ import subprocess
 import sys
 import json
 import time
+import urllib.request
 import pytest
 
 from qusec.hardware.optical import QuantumChannel, EthernetDetector
@@ -361,3 +362,41 @@ def test_optical_fibre_disconnect_rejection():
 
     sender.stop()
     receiver.stop()
+
+
+def test_gateway_web_bridge_endpoints():
+    """Verify that web bridge endpoints (/status, /send, /init) work seamlessly."""
+    node = QuSecNode(
+        role="sender",
+        gateway_port=18790,
+        force_simulation=True,
+    )
+    assert node.initialize() is True
+    time.sleep(0.3)
+
+    # 1. Test /status endpoint
+    req = urllib.request.Request("http://127.0.0.1:18790/status")
+    with urllib.request.urlopen(req, timeout=2.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        assert data["status"] == "ONLINE"
+        assert "channel" in data
+        assert "key_pool" in data
+
+    # 2. Test /send endpoint
+    send_payload = json.dumps({"text": "Web Bridge Test Message", "mode": "teleportation"}).encode("utf-8")
+    send_req = urllib.request.Request("http://127.0.0.1:18790/send", data=send_payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(send_req, timeout=2.0) as resp:
+        assert resp.status == 200
+        send_data = json.loads(resp.read().decode("utf-8"))
+        assert send_data["success"] is True
+
+    # 3. Test /init endpoint
+    init_payload = json.dumps({"action": "init_session"}).encode("utf-8")
+    init_req = urllib.request.Request("http://127.0.0.1:18790/init", data=init_payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(init_req, timeout=2.0) as resp:
+        assert resp.status == 200
+        init_data = json.loads(resp.read().decode("utf-8"))
+        assert init_data["success"] is True
+
+    node.stop()
