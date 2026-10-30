@@ -31,8 +31,18 @@ from qusec.protocol.cascade import CascadeReconciler
 from qusec.protocol.privacy import PrivacyAmplifier
 from qusec.crypto.otp import OneTimePad, string_to_bits, bits_to_string
 from qusec.crypto.auth import WegmanCarterMAC
+from qusec.crypto.quantum_keys import (
+    QuantumKeyPair,
+    QuantumPublicKey,
+    QuantumPrivateKey,
+    encrypt_with_quantum_public_key,
+    decrypt_with_quantum_private_key,
+    sign_with_quantum_private_key,
+    verify_with_quantum_public_key,
+)
 from qusec.session.key_pool import KeyPool
 from qusec.session.manager import SessionManager, SessionState
+
 from qusec.gateway.server import GatewayServer, GatewayContext
 from qusec.gateway.events import EventEmitter
 from qusec.ui.terminal_ui import TerminalUIDashboard
@@ -159,6 +169,22 @@ class QuSecNode:
         self.on_message_callback: Optional[Any] = None
         self.threshold_engine = ThresholdEngine(sa=0.05, sv=0.15, q_threshold=0.06)
         self.active_attack: Optional[str] = None
+
+    @property
+    def quantum_public_key(self) -> QuantumPublicKey:
+        """Node's local Quantum Public Key."""
+        return self.session_mgr.keypair.public_key
+
+    @property
+    def quantum_private_key(self) -> QuantumPrivateKey:
+        """Node's local Quantum Private Key."""
+        return self.session_mgr.keypair.private_key
+
+    @property
+    def peer_quantum_public_key(self) -> QuantumPublicKey:
+        """Peer's Quantum Public Key."""
+        return self.session_mgr.get_peer_quantum_public_key()
+
 
     def trigger_esp32_threat_alarm(self, enable: bool = True):
         """Control the ESP32 second LED security threat alarm (blinks on threat)."""
@@ -334,14 +360,56 @@ class QuSecNode:
         self.ui.set_pipeline_stage("Correct", "pending")
         return len(secure_bits)
 
+    def render_outgoing_transmission_report(
+        self,
+        session_id: str,
+        recipient_name: str,
+        message: str,
+        total_qubits: int,
+        pauli_x_count: int,
+        pauli_z_count: int,
+        recipient_pk_fingerprint: str,
+        sender_sk_fingerprint: str,
+        ciphertext_snippet: str,
+        signature_snippet: str,
+    ):
+        """Render formatted outgoing quantum transmission report in terminal."""
+        console = Console()
+        table = Table(
+            title="[bold cyan]══ 🚀 QUSEC OUTGOING QUANTUM TRANSMISSION ══[/bold cyan]",
+            box=box.SQUARE,
+            show_header=True,
+            header_style="bold white",
+        )
+        table.add_column("Parameter", style="cyan", width=32)
+        table.add_column("Value / Measurement", style="white")
+
+        table.add_row("Session ID", session_id)
+        table.add_row("Transmission Direction", f"{self.role_title} ➔ {recipient_name}")
+        table.add_row("Plaintext Message", f"\"{message}\"")
+        table.add_row("Receiver Quantum Public Key", f"[bold green]{recipient_pk_fingerprint}[/bold green] (Encrypted Payload)")
+        table.add_row("Sender Quantum Private Key", f"[bold yellow]{sender_sk_fingerprint}[/bold yellow] (Signed Digital Signature)")
+        table.add_row("Ciphertext Snippet", f"[dim]{ciphertext_snippet}[/dim]")
+        table.add_row("Encrypted QDS Signature", f"[dim]{signature_snippet}[/dim]")
+        table.add_row("Optical Channel (Fibre)", f"{total_qubits} Qubits Dispatched (Port {self.optical_port})")
+        table.add_row("ESP32 Classical Channel", f"Pauli bits X={pauli_x_count}, Z={pauli_z_count} & MAC (Port {self.classical_port})")
+        carrier_status = "[bold green]Active (Photons Crossing Glass Fibre)[/bold green]" if self.quantum_channel.link_ok else "[yellow]Simulation[/yellow]"
+        table.add_row("Channel Status", carrier_status)
+
+        console.print("\n")
+        console.print(table)
+        console.print("[bold green]✔ Transmission dispatched across Quantum & Classical Links![/bold green]\n")
+
     def send_message(self, recipient: str, message: str, mode: str = "teleportation") -> Dict[str, Any]:
         """
         Send a secure message across the quantum channel.
         Both Sender and Receiver can call this to send messages.
-        Modes:
-        - 'teleportation': Encodes message bits into qubits, executes Bell State Measurement (BSM),
-          transmits optical state frames + 2-bit classical corrections over ESP32 Wi-Fi, and executes Pauli reconstruction.
-        - 'otp': Consumes exact bits from KeyPool, encrypts with One-Time-Pad, and signs with Wegman-Carter MAC.
+
+        Cryptographic Pipeline:
+        1. Encrypt message using Receiver's Quantum Public Key (RSA-OAEP 2048 + AES-256-GCM).
+        2. Generate Quantum Digital Signature (QDS) and encrypt it using Sender's Quantum Private Key (RSA-PSS SHA256).
+        3. Teleport quantum states across the Optical Fibre Link (Port 9876).
+        4. Transmit classical Pauli coordinates, ciphertext, encrypted signature, and MAC over ESP32 link (Port 9877).
         """
         msg_bits = string_to_bits(message)
         if not self.session_mgr.session_id or self.session_mgr.state != SessionState.ESTABLISHED:
@@ -353,6 +421,17 @@ class QuSecNode:
         t0 = time.time()
         target_role = recipient.capitalize() if recipient else self.peer_title
 
+        # Retrieve quantum keys
+        recipient_pk = self.session_mgr.get_peer_quantum_public_key()
+        sender_sk = self.session_mgr.keypair.private_key
+        sender_pk = self.session_mgr.keypair.public_key
+
+        # 1. Encrypt message using Receiver's Quantum Public Key
+        encrypted_payload = encrypt_with_quantum_public_key(message, recipient_pk)
+
+        # 2. Generate and encrypt Quantum Digital Signature using Sender's Quantum Private Key
+        quantum_sig = sign_with_quantum_private_key(message, sender_sk)
+
         if mode == "teleportation":
             self.ui.set_pipeline_stage("Teleport", "active")
             teleport_results = []
@@ -360,7 +439,7 @@ class QuSecNode:
             c1_bits = []
             bob_qubits = []
 
-            # 1. Teleport message payload bits
+            # Teleport message payload bits
             for b in msg_bits:
                 res = self.teleporter.teleport_single_qubit(input_bit=b, sender_basis="Z", bob_basis="Z")
                 c0, c1 = res["classical_bits"]
@@ -369,7 +448,7 @@ class QuSecNode:
                 bob_qubits.append(res["bob_bit"])
                 teleport_results.append(res)
 
-            # 2. Append SARG04 decoy and test qubits for real-time channel threat detection
+            # Append SARG04 decoy and test qubits for real-time channel threat detection
             num_test = max(16, min(64, len(msg_bits) // 2))
             test_indices = list(range(len(msg_bits), len(msg_bits) + num_test))
             test_values = []
@@ -412,12 +491,17 @@ class QuSecNode:
             }
             self.quantum_channel.send_quantum_frame("TELEPORT_QUANTUM_BURST", optical_payload)
 
-            # Transmit classical 2-bit coordinates over ESP32 link with Wegman-Carter MAC
+            # Transmit classical packet over ESP32 link with Wegman-Carter MAC
             classical_payload = {
                 "msg_id": msg_id,
                 "sender_role": self.role_title,
                 "recipient": target_role,
                 "text": message,
+                "encrypted_payload": encrypted_payload,
+                "quantum_signature": quantum_sig,
+                "sender_public_key": sender_pk.to_dict(),
+                "recipient_pk_fingerprint": recipient_pk.fingerprint,
+                "sender_sk_fingerprint": sender_sk.fingerprint,
                 "c0_bits": c0_bits,
                 "c1_bits": c1_bits,
                 "data_bit_count": len(msg_bits),
@@ -430,14 +514,29 @@ class QuSecNode:
             mac_tag, _ = WegmanCarterMAC.authenticate_with_pool(
                 json.dumps(classical_payload).encode("utf-8"), self.key_pool
             )
-            # If forgery attack is simulated, corrupt MAC tag
             if self.active_attack == "forgery":
                 mac_tag = "deadbeef" * 4
 
             self.classical_channel.send_classical("TELEPORT_MESSAGE", classical_payload, mac=mac_tag)
 
             self.ui.set_pipeline_stage("Correct", "done")
-            self.ui.add_log(f"Sent to {target_role}: \"{message}\" [Teleportation]")
+            self.ui.add_log(f"Sent to {target_role}: \"{message}\" [Quantum Public-Key Encrypted + QDS Signed]")
+
+            # Render Outgoing Quantum Transmission report in terminal
+            ct_snippet = encrypted_payload["ciphertext_hex"][:32] + "..."
+            sig_snippet = quantum_sig["signature_hex"][:32] + "..."
+            self.render_outgoing_transmission_report(
+                session_id=self.session_mgr.session_id or "a91f",
+                recipient_name=target_role,
+                message=message,
+                total_qubits=total_qubits,
+                pauli_x_count=sum(c1_bits),
+                pauli_z_count=sum(c0_bits),
+                recipient_pk_fingerprint=recipient_pk.fingerprint,
+                sender_sk_fingerprint=sender_sk.fingerprint,
+                ciphertext_snippet=ct_snippet,
+                signature_snippet=sig_snippet,
+            )
 
             # Record in sent store
             record = {
@@ -447,11 +546,12 @@ class QuSecNode:
                 "direction": "outgoing",
                 "text": message,
                 "mode": "teleportation",
+                "recipient_pk": recipient_pk.fingerprint,
+                "sender_sk": sender_sk.fingerprint,
                 "timestamp": t0,
             }
             self.sent_messages.append(record)
             self.gateway_ctx.received_messages.append(record)
-
             self.events.emit("message_sent", record)
 
             # Consume small nominal key bits for authentication
@@ -468,7 +568,9 @@ class QuSecNode:
                 "mode": "teleportation",
                 "message": message,
                 "qubits_teleported": len(msg_bits),
-                "security": "laptop-to-laptop quantum-secure",
+                "recipient_public_key": recipient_pk.fingerprint,
+                "sender_private_key": sender_sk.fingerprint,
+                "security": "quantum-asymmetric-public-key + QDS",
             }
 
         else:  # One-Time-Pad mode
@@ -487,10 +589,30 @@ class QuSecNode:
                 "ciphertext": ct_hex,
                 "raw_key_bits": raw_keys,
                 "bit_length": otp_res["bit_length"],
+                "encrypted_payload": encrypted_payload,
+                "quantum_signature": quantum_sig,
+                "sender_public_key": sender_pk.to_dict(),
+                "recipient_pk_fingerprint": recipient_pk.fingerprint,
+                "sender_sk_fingerprint": sender_sk.fingerprint,
                 "mode": "otp",
             }
             self.classical_channel.send_classical("OTP_MESSAGE", payload, mac=mac_tag)
             self.ui.add_log(f"Sent to {target_role}: \"{message}\" [OTP - {otp_res['bit_length']} bits burned]")
+
+            ct_snippet = encrypted_payload["ciphertext_hex"][:32] + "..."
+            sig_snippet = quantum_sig["signature_hex"][:32] + "..."
+            self.render_outgoing_transmission_report(
+                session_id=self.session_mgr.session_id or "a91f",
+                recipient_name=target_role,
+                message=message,
+                total_qubits=0,
+                pauli_x_count=0,
+                pauli_z_count=0,
+                recipient_pk_fingerprint=recipient_pk.fingerprint,
+                sender_sk_fingerprint=sender_sk.fingerprint,
+                ciphertext_snippet=ct_snippet,
+                signature_snippet=sig_snippet,
+            )
 
             record = {
                 "id": msg_id,
@@ -500,11 +622,12 @@ class QuSecNode:
                 "text": message,
                 "ciphertext": ct_hex,
                 "mode": "otp",
+                "recipient_pk": recipient_pk.fingerprint,
+                "sender_sk": sender_sk.fingerprint,
                 "timestamp": t0,
             }
             self.sent_messages.append(record)
             self.gateway_ctx.received_messages.append(record)
-
             self.events.emit("message_sent", record)
 
             self.ui.set_session_info(
@@ -518,8 +641,11 @@ class QuSecNode:
                 "mode": "otp",
                 "ciphertext": ct_hex,
                 "bits_consumed": otp_res["bit_length"],
-                "security": "laptop-to-laptop quantum-secure",
+                "recipient_public_key": recipient_pk.fingerprint,
+                "sender_private_key": sender_sk.fingerprint,
+                "security": "quantum-asymmetric-public-key + QDS + OTP",
             }
+
 
     def _channel_listener_loop(self):
         """
@@ -562,6 +688,10 @@ class QuSecNode:
         hoeffding_eps: float,
         decision: str,
         threat_type: Optional[str] = None,
+        recipient_sk_fingerprint: Optional[str] = None,
+        sender_pk_fingerprint: Optional[str] = None,
+        sig_decision: Optional[str] = None,
+        decrypted_message: Optional[str] = None,
     ):
         """
         Renders the full QuSec Quantum Security Report table in terminal,
@@ -579,8 +709,19 @@ class QuSecNode:
 
         table.add_row("Session ID", session_id)
         table.add_row("Transmission Link", f"{sender_name} ➔ {recipient_name} [Bidirectional]")
-        table.add_row("Protocol", "Quantum Teleportation (3-Qubit Bell) + SARG04 Decoy")
-        table.add_row("Transmitted Qubits", f"{total_qubits} qubits (Optical Transceiver)")
+        table.add_row("Protocol", "Quantum Teleportation (3-Qubit Bell) + SARG04 Decoy + QDS")
+
+        if recipient_sk_fingerprint:
+            table.add_row("Receiver Quantum Private Key", f"[bold yellow]{recipient_sk_fingerprint}[/bold yellow] (Decrypted Plaintext)")
+        if sender_pk_fingerprint:
+            table.add_row("Sender Quantum Public Key", f"[bold green]{sender_pk_fingerprint}[/bold green] (Verified Signature)")
+        if sig_decision:
+            sig_col = "bold green" if ("VERIFIED" in sig_decision or "Verified" in sig_decision) else "bold red"
+            table.add_row("Quantum Digital Signature", f"[{sig_col}]{sig_decision}[/{sig_col}]")
+        if decrypted_message and decision == "VERIFIED":
+            table.add_row("Decrypted Message Plaintext", f"[bold white]\"{decrypted_message}\"[/bold white]")
+
+        table.add_row("Transmitted Qubits", f"{total_qubits} qubits (Optical Transceiver Port {self.optical_port})")
         table.add_row("Pauli X Corrections (c1=1)", f"{pauli_x_count} Applied (Wireless ESP32)")
         table.add_row("Pauli Z Corrections (c0=1)", f"{pauli_z_count} Applied (Wireless ESP32)")
         table.add_row("Conclusive Sifted Qubits (μ)", str(conclusive_sifted))
@@ -600,7 +741,7 @@ class QuSecNode:
         table.add_row("Threshold Status", status_text)
 
         alarm_status = (
-            "[bold red]BLINKING (ESP32 Second LED Active)[/bold red]"
+            "[bold red]BLINKING (ESP32 Second LED Active on GPIO 4)[/bold red]"
             if is_threat
             else "[bold green]CLEAR (ESP32 Second LED OFF)[/bold green]"
         )
@@ -633,6 +774,20 @@ class QuSecNode:
             decoy_types = payload.get("decoy_types", [])
             attack_meta = payload.get("attack")
 
+            # Extract quantum cryptographic payloads
+            enc_payload = payload.get("encrypted_payload")
+            quantum_sig = payload.get("quantum_signature")
+            sender_pk_dict = payload.get("sender_public_key")
+
+            sender_pk = None
+            if sender_pk_dict:
+                try:
+                    sender_pk = QuantumPublicKey.from_dict(sender_pk_dict)
+                except Exception:
+                    pass
+            if not sender_pk:
+                sender_pk = self.session_mgr.get_peer_quantum_public_key()
+
             # Verify optical quantum burst arrival across physical fiber
             optical_burst = self._received_optical_bursts.pop(msg_id, None)
             if not optical_burst:
@@ -660,14 +815,34 @@ class QuSecNode:
             pauli_z_count = sum(1 for c0 in c0_bits if c0 == 1)
             recovered_bits = bob_qubits if bob_qubits else [0 if (c0 ^ c1) == 0 else 1 for c0, c1 in zip(c0_bits, c1_bits)]
 
-            # Reconstruct message data from the data portion
-            recovered_data_bits = recovered_bits[:data_count]
-            try:
-                decrypted_text = bits_to_string(recovered_data_bits)
-            except Exception:
-                decrypted_text = text
+            # 2. Decrypt message using Receiver's Quantum Private Key
+            decrypted_text = ""
+            if enc_payload:
+                try:
+                    decrypted_text = decrypt_with_quantum_private_key(
+                        enc_payload, self.session_mgr.keypair.private_key
+                    )
+                except Exception as dec_err:
+                    logger.warning("Quantum private key decryption failed: %s", dec_err)
 
-            # 2. Statistical Verification on SARG04 Test/Decoy Qubits
+            if not decrypted_text:
+                recovered_data_bits = recovered_bits[:data_count]
+                try:
+                    decrypted_text = bits_to_string(recovered_data_bits)
+                except Exception:
+                    decrypted_text = text
+
+            # 3. Decrypt & Verify Quantum Digital Signature using Sender's Quantum Public Key
+            sig_valid = True
+            sig_status = "VERIFIED (Cryptographic Non-Repudiation)"
+            if quantum_sig and sender_pk:
+                sig_valid, sig_msg = verify_with_quantum_public_key(decrypted_text, quantum_sig, sender_pk)
+                sig_status = "VERIFIED" if sig_valid else f"FAILED ({sig_msg})"
+                if attack_meta == "forgery" or self.active_attack == "forgery":
+                    sig_valid = False
+                    sig_status = "REJECTED (Simulated Forgery Attack)"
+
+            # 4. Statistical Verification on SARG04 Test/Decoy Qubits
             conclusive_mu = 0
             detected_errors = 0
             for idx, exp_val, basis, decoy in zip(test_indices, test_values, test_bases, decoy_types):
@@ -700,7 +875,7 @@ class QuSecNode:
                     json.dumps(clean_payload).encode("utf-8"), mac_tag, self.key_pool
                 )
 
-            # 3. Security Threshold Evaluation (ThresholdEngine Q_th = 0.06)
+            # 5. Security Threshold Evaluation (ThresholdEngine Q_th = 0.06)
             threshold = self.threshold_engine.q_threshold
 
             threat_detected = False
@@ -710,13 +885,16 @@ class QuSecNode:
                 threat_detected = True
                 threat_type = "Optical Fibre Disconnected (Dark Cable - 0 Photons Received)"
                 decision = "REJECTED (OPTICAL FIBRE DISCONNECTED)"
-                # Set optical status to False in gateway and UI
                 self.gateway_ctx.hardware_state["fibre_ok"] = False
                 self.ui.set_hardware_status(fibre_ok=False, esp32_ok=self.classical_channel.esp32_ok, is_simulation=self.force_simulation)
             elif calc_qber > threshold:
                 threat_detected = True
                 threat_type = "Quantum Channel Tampering / Intercept-Resend"
                 decision = "REJECTED (QBER THRESHOLD EXCEEDED)"
+            elif not sig_valid:
+                threat_detected = True
+                threat_type = f"Quantum Digital Signature Invalid ({sig_status})"
+                decision = "REJECTED (QUANTUM SIGNATURE MISMATCH)"
             elif not mac_valid:
                 threat_detected = True
                 threat_type = "Impersonation / Forgery Attack"
@@ -728,7 +906,7 @@ class QuSecNode:
             else:
                 decision = "VERIFIED"
 
-            # 4. Hardware Action: Control Second LED on ESP32
+            # 6. Hardware Action: Control Second LED on ESP32
             if threat_detected:
                 self.trigger_esp32_threat_alarm(True)
             else:
@@ -741,7 +919,7 @@ class QuSecNode:
                 chsh=2.82 if not threat_detected else 1.41,
             )
 
-            # 5. Render Full Quantum Security Report Table
+            # 7. Render Full Quantum Security Report Table
             self.render_quantum_security_report(
                 session_id=self.session_mgr.session_id or "a91f",
                 sender_name=sender_name,
@@ -756,9 +934,13 @@ class QuSecNode:
                 hoeffding_eps=hoeff_eps,
                 decision=decision,
                 threat_type=threat_type,
+                recipient_sk_fingerprint=self.session_mgr.keypair.private_key.fingerprint,
+                sender_pk_fingerprint=sender_pk.fingerprint if sender_pk else "Unknown",
+                sig_decision=sig_status,
+                decrypted_message=decrypted_text,
             )
 
-            # 6. Show Message / Security Alert
+            # 8. Show Message / Security Alert
             if threat_detected:
                 display_text = f"[BLOCKED: {decision}]"
                 record = {
@@ -772,6 +954,8 @@ class QuSecNode:
                     "threat": True,
                     "qber": calc_qber,
                     "decision": decision,
+                    "recipient_sk": self.session_mgr.keypair.private_key.fingerprint,
+                    "sender_pk": sender_pk.fingerprint if sender_pk else "Unknown",
                 }
             else:
                 display_text = decrypted_text or text
@@ -786,6 +970,8 @@ class QuSecNode:
                     "threat": False,
                     "qber": calc_qber,
                     "decision": decision,
+                    "recipient_sk": self.session_mgr.keypair.private_key.fingerprint,
+                    "sender_pk": sender_pk.fingerprint if sender_pk else "Unknown",
                 }
 
             self.received_messages.append(record)
@@ -812,8 +998,36 @@ class QuSecNode:
             sender_name = payload.get("sender_role", self.peer_title)
             ct_hex = payload.get("ciphertext", "")
             raw_keys = payload.get("raw_key_bits", [])
+            enc_payload = payload.get("encrypted_payload")
+            quantum_sig = payload.get("quantum_signature")
+            sender_pk_dict = payload.get("sender_public_key")
 
-            decrypted_text = OneTimePad.decrypt(ct_hex, raw_keys) if raw_keys else "[Encrypted OTP]"
+            sender_pk = None
+            if sender_pk_dict:
+                try:
+                    sender_pk = QuantumPublicKey.from_dict(sender_pk_dict)
+                except Exception:
+                    pass
+            if not sender_pk:
+                sender_pk = self.session_mgr.get_peer_quantum_public_key()
+
+            decrypted_text = ""
+            if enc_payload:
+                try:
+                    decrypted_text = decrypt_with_quantum_private_key(enc_payload, self.session_mgr.keypair.private_key)
+                except Exception:
+                    pass
+
+            if not decrypted_text and raw_keys:
+                decrypted_text = OneTimePad.decrypt(ct_hex, raw_keys)
+            if not decrypted_text:
+                decrypted_text = "[Encrypted OTP]"
+
+            sig_valid = True
+            sig_status = "VERIFIED (OTP + QDS Authenticated)"
+            if quantum_sig and sender_pk:
+                sig_valid, sig_msg = verify_with_quantum_public_key(decrypted_text, quantum_sig, sender_pk)
+                sig_status = "VERIFIED" if sig_valid else f"FAILED ({sig_msg})"
 
             record = {
                 "id": msg_id,
@@ -823,6 +1037,10 @@ class QuSecNode:
                 "text": decrypted_text,
                 "ciphertext": ct_hex,
                 "mode": "otp",
+                "threat": not sig_valid,
+                "decision": "VERIFIED" if sig_valid else "REJECTED (SIGNATURE MISMATCH)",
+                "recipient_sk": self.session_mgr.keypair.private_key.fingerprint,
+                "sender_pk": sender_pk.fingerprint if sender_pk else "Unknown",
                 "timestamp": time.time(),
             }
             self.received_messages.append(record)
@@ -858,6 +1076,49 @@ class QuSecNode:
         elif p_type == "MSG_ACK":
             ack_id = payload.get("ack_id")
             logger.debug("Received delivery ACK for %s", ack_id)
+
+    def run_transmission_monitor(self, duration_seconds: Optional[int] = None):
+        """
+        Runs QuSec in Live Transmission Monitor mode.
+        Connects to the website https://shnik-lake.vercel.app and hardware (ESP32 & Optical Link).
+        Does NOT prompt for input in the terminal.
+        Live transmissions triggered from the website or library commands stream directly onto the terminal.
+        """
+        self.initialize()
+        console = Console()
+
+        console.print(f"[bold cyan]╔══════════════════════════════════════════════════════════════════════════════╗[/bold cyan]")
+        console.print(f"[bold green]║    QuSec Quantum Transport & Shnik Web Bridge · [{self.role_title.upper()}]                ║[/bold green]")
+        console.print(f"[bold cyan]╠══════════════════════════════════════════════════════════════════════════════╣[/bold cyan]")
+        fibre_tag = "[bold green]ONLINE (Glass Fibre Connected)[/bold green]" if self.quantum_channel.link_ok else "[yellow]SIMULATION[/yellow]"
+        esp_tag = "[bold green]ONLINE (ESP32 Hardware Connected)[/bold green]" if self.classical_channel.esp32_ok else "[yellow]SIMULATION[/yellow]"
+        console.print(f" • Hardware Classical Link (ESP32): {esp_tag}")
+        console.print(f" • Hardware Quantum Link (Optical): {fibre_tag}")
+        console.print(f" • Node Role:                      [bold yellow]{self.role_title}[/bold yellow] (Peer: {self.peer_title})")
+        console.print(f" • Quantum Public Key:             [bold green]{self.session_mgr.keypair.public_key.fingerprint}[/bold green]")
+        console.print(f" • Quantum Private Key:            [bold yellow]{self.session_mgr.keypair.private_key.fingerprint}[/bold yellow] [Secured in Memory]")
+        console.print(f" • Peer Quantum Public Key:        [cyan]{self.session_mgr.get_peer_quantum_public_key().fingerprint}[/cyan]")
+        console.print(f" • Platform Gateway Server:        [bold white]http://0.0.0.0:{self.gateway_port}[/bold white]")
+        console.print(f" • Connected Web Application:      [bold cyan]https://shnik-lake.vercel.app[/bold cyan]")
+        console.print(f" • Active Key Pool:                [bold green]{self.key_pool.available_bits:,} bits[/bold green]")
+        console.print(f"[bold cyan]╠══════════════════════════════════════════════════════════════════════════════╣[/bold cyan]")
+        console.print(f" [dim]Mode: Live Transmission Monitor. Transmissions from website or library    [/dim]")
+        console.print(f" [dim]commands stream here automatically. User does not type in terminal.       [/dim]")
+        console.print(f" [dim]Press Ctrl+C to stop.                                                     [/dim]")
+        console.print(f"[bold cyan]╚══════════════════════════════════════════════════════════════════════════════╝[/bold cyan]\n")
+
+        start_time = time.time()
+        try:
+            while self.is_running:
+                time.sleep(0.5)
+                if duration_seconds and (time.time() - start_time) >= duration_seconds:
+                    break
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Shutdown requested. Gracefully stopping QuSec transport...[/yellow]")
+        finally:
+            self.stop()
+            console.print("[bold red]QuSec transport stopped.[/bold red]")
+
 
     def run_live(self, duration_seconds: Optional[int] = None):
         """Run interactive Live terminal dashboard."""

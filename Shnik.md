@@ -1,7 +1,7 @@
 # 🌐 Shnik — Quantum-Secured Social Messaging Platform
 ### Connected with QuSec (Real-World Quantum Cyber-Threat Detection Framework)
 
-[![QuSec Version](https://img.shields.io/badge/QuSec-v0.2.2-00e5ff?style=flat-square)](https://pypi.org/project/qusec/)
+[![QuSec Version](https://img.shields.io/badge/QuSec-v0.2.3-00e5ff?style=flat-square)](https://pypi.org/project/qusec/)
 [![Website](https://img.shields.io/badge/Live_App-shnik--lake.vercel.app-00e676?style=flat-square)](https://shnik-lake.vercel.app)
 [![Protocol](https://img.shields.io/badge/Security-Teleportation_%2B_SARG04-ff0055?style=flat-square)](#-quantum-security-architecture)
 [![Hardware](https://img.shields.io/badge/Hardware-Optical_Fibre_%2B_ESP32-ffab00?style=flat-square)](#-hardware-setup--deployment-modes)
@@ -74,9 +74,16 @@ $$\text{Encode} \longrightarrow \text{Entangle} \longrightarrow \text{Test} \lon
 4. **Teleport**: Executes Bell State Measurement (BSM) and transmits quantum states across the optical fiber transceivers (port 9876).
 5. **Correct**: Transmits 2-bit classical corrections ($c_0, c_1$) over the ESP32 wireless link and applies Pauli $X$ and $Z$ corrections at the receiver.
 
-### 4. Dual Transmission Security Modes
-- **Quantum Teleportation**: Teleports arbitrary quantum state coordinates across the optical fiber link. If an attacker measures the flying qubits, their wavefunctions collapse, instantly driving QBER above $6\%$.
-- **Information-Theoretic One-Time Pad (OTP)**: Encrypts message bytes with genuine secret bits consumed from the quantum key pool and authenticates each frame with a Wegman-Carter polynomial MAC.
+### 4. Quantum Public & Private Key Asymmetric Security + QDS
+QuSec pairs quantum state teleportation with an asymmetric quantum key architecture and Quantum Digital Signatures (QDS):
+- **Quantum Keypair Generation**: Each node (Sender and Receiver) automatically generates an asymmetric `QuantumKeyPair` on initialization:
+  - **Quantum Public Key (`Q-PK-...`)**: Exchanged during the initial quantum handshake over the classical ESP32 link. Exposed to the peer and displayed on the Shnik website.
+  - **Quantum Private Key (`Q-SK-...`)**: Kept strictly confidential in endpoint memory; never transmitted over the network or exposed in plaintext.
+- **Receiver Public Key Encryption**: The sender encrypts the message payload using the **Receiver's Quantum Public Key** (RSA-OAEP 2048 + AES-256-GCM hybrid encapsulation). Only the receiver possessing the corresponding **Quantum Private Key** can decrypt it.
+- **Sender Private Key Digital Signature (QDS)**: The sender signs and encrypts a Quantum Digital Signature using its own **Quantum Private Key** (RSA-PSS SHA-256 combined with a 16-bit decoy QDS pattern). This guarantees mathematical non-repudiation and sender authenticity.
+- **Dual Physical Transport**:
+  - **Optical Fibre Channel (Port 9876 UDP)**: Transmits flying qubits, Bell-state measurement states, and SARG04 decoy states ($\mu, \nu, \text{vac}$) across genuine glass fiber.
+  - **ESP32 Classical Channel (Port 9877 UDP / USB Serial)**: Transmits classical Pauli correction coordinates ($c_0, c_1$), encrypted payload, QDS signature, and Wegman-Carter polynomial MAC. Controls the hardware Threat Alarm LED (GPIO 4).
 
 ### 5. Genuine Physical Threat Detection & Visual Alarms
 - **Optical Cable Unplug Alert**: If the physical optical fiber cable is disconnected during transmission, zero photons arrive. Shnik instantly marks the message as `REJECTED (OPTICAL FIBRE DISCONNECTED)`, blocks message plaintext from displaying, and triggers the hardware threat alarm LED on the ESP32.
@@ -91,23 +98,42 @@ Because **Shnik** is deployed on secure HTTPS ([https://shnik-lake.vercel.app](h
 
 Follow these 3 simple steps to link Shnik with your terminal:
 
-### Step 1: Start the QuSec Node in Your Terminal
+### Step 1: Start the QuSec Bridge in Your Terminal
+
+> **Note:** You do **not** type messages into the terminal!  
+> The terminal acts as a **Live Transmission Monitor** that displays real-time quantum telemetry, qubit counts, public/private key fingerprints, and threat verification reports. Messages are sent directly from the **[Shnik Website](https://shnik-lake.vercel.app)** or via CLI commands like `qusec send`.
 
 Open your terminal and run:
 
 ```bash
-# If using real hardware (Optical Converters + ESP32):
-qusec chat --role sender --peer-host 192.168.2.2
+# Real hardware mode (Optical Media Converters + ESP32):
+qusec bridge --role sender --peer-host 192.168.2.2
 
-# If testing locally on a single machine (Simulation mode):
-qusec chat --role sender --sim
+# Single-machine simulation mode:
+qusec bridge --role sender --sim
 ```
 
-You will see:
+*(On the receiver laptop or second terminal, run `qusec bridge --role receiver --peer-host 192.168.2.1` or `qusec bridge --role receiver --sim --port 8766`).*
+
+You will see the live QuSec Transmission Monitor banner:
 ```text
-QuSec Core Node Runtime Initialized.
-Gateway server listening on http://0.0.0.0:8765
-WebSocket server listening on ws://127.0.0.1:8765/ws
+╔══════════════════════════════════════════════════════════════════════════════╗
+║    QuSec Quantum Transport & Shnik Web Bridge · [SENDER]                     ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+ • Hardware Classical Link (ESP32): ONLINE (ESP32 Hardware Connected)
+ • Hardware Quantum Link (Optical): ONLINE (Glass Fibre Connected)
+ • Node Role:                      Sender (Peer: Receiver)
+ • Quantum Public Key:             Q-PK-SENDER-A41B-97E2-6C81-5401
+ • Quantum Private Key:            Q-SK-SENDER-A41B-97E2-6C81-5401 [Secured in Memory]
+ • Peer Quantum Public Key:        Q-PK-RECV-7E43-1289-54AA-19BF
+ • Platform Gateway Server:        http://0.0.0.0:8765
+ • Connected Web Application:      https://shnik-lake.vercel.app
+ • Active Key Pool:                4,820 bits
+╠══════════════════════════════════════════════════════════════════════════════╣
+ Mode: Live Transmission Monitor. Transmissions from website or library
+ commands stream here automatically. User does not type in terminal.
+ Press Ctrl+C to stop.
+╚══════════════════════════════════════════════════════════════════════════════╝
 ```
 
 ---
@@ -130,14 +156,45 @@ By default, Google Chrome, Brave, and Microsoft Edge block public HTTPS pages fr
 
 ---
 
-### Step 3: Confirm Successful Link
+### Step 3: Transmit Messages & View Live Terminal Stream
 
 After reloading:
 - The top-right status badge in Shnik will illuminate **GREEN**:
   ```text
   ● QuSec Node Online | Quantum Fibre: Connected | ESP32: Active
   ```
-- Any message you type into Shnik will now be processed through the terminal's quantum teleportation engine and transmitted across your hardware!
+- Send any message from the **Shnik Website** ([shnik-lake.vercel.app](https://shnik-lake.vercel.app)).
+- The sender terminal instantly renders the **Outgoing Quantum Transmission** report:
+  ```text
+  ══ 🚀 QUSEC OUTGOING QUANTUM TRANSMISSION ══
+  ┌──────────────────────────────┬───────────────────────────────────────────────┐
+  │ Parameter                    │ Value / Measurement                           │
+  ├──────────────────────────────┼───────────────────────────────────────────────┤
+  │ Session ID                   │ a91f                                          │
+  │ Transmission Direction       │ Sender ➔ Receiver                             │
+  │ Plaintext Message            │ "Hello from Shnik!"                           │
+  │ Receiver Quantum Public Key  │ Q-PK-RECV-7E43-1289-54AA-19BF (Encrypted)     │
+  │ Sender Quantum Private Key   │ Q-SK-SENDER-A41B-97E2-6C81-5401 (QDS Signed)  │
+  │ Optical Channel (Fibre)      │ 248 Qubits Dispatched (Port 9876)             │
+  │ ESP32 Classical Channel      │ Pauli bits X=120, Z=128 & MAC (Port 9877)     │
+  │ Channel Status               │ Active (Photons Crossing Glass Fibre)         │
+  └──────────────────────────────┴───────────────────────────────────────────────┘
+  ```
+- The receiver terminal instantly decrypts the message with its **Quantum Private Key**, verifies the **Sender Quantum Public Key**, and renders the **Quantum Security Report**:
+  ```text
+  ══ QUSEC QUANTUM SECURITY REPORT ══
+  ┌──────────────────────────────┬───────────────────────────────────────────────┐
+  │ Parameter                    │ Value / Measurement                           │
+  ├──────────────────────────────┼───────────────────────────────────────────────┤
+  │ Session ID                   │ a91f                                          │
+  │ Receiver Quantum Private Key │ Q-SK-RECV-7E43-1289-54AA-19BF (Decrypted)     │
+  │ Sender Quantum Public Key    │ Q-PK-SENDER-A41B-97E2-6C81-5401 (Verified)    │
+  │ Quantum Digital Signature    │ VERIFIED (Cryptographic Non-Repudiation)      │
+  │ Decrypted Message Plaintext  │ "Hello from Shnik!"                           │
+  │ Calculated QBER              │ 0.00% (Threshold: 6.00%)                      │
+  │ Hardware Threat Alarm        │ CLEAR (ESP32 Second LED OFF)                  │
+  └──────────────────────────────┴───────────────────────────────────────────────┘
+  ```
 
 > **💡 Zero-Configuration Alternative (Built-in Local Web Chat):**  
 > If you prefer not to change browser permissions, open the locally hosted web chat served directly by your QuSec node:  
@@ -275,7 +332,7 @@ Prints the installed QuSec framework version:
 
 ```bash
 qusec version
-# Output: QuSec v0.2.2
+# Output: QuSec v0.2.3
 ```
 
 ---

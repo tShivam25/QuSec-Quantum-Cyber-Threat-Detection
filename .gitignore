@@ -30,3 +30,6 @@ htmlcov/
 
 # OS
 .DS_Store
+
+# Local backups
+QuSec 31-10 changes/

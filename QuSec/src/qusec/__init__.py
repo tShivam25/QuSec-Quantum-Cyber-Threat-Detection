@@ -2,7 +2,7 @@
 QuSec - Quantum Security Framework for Quantum Digital Signature Threat Detection
 """
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 from qusec.quantum.bell import bell_pair, correct
 from qusec.detection.qber import qber, hoeffding_margin, theoretical_qber, TwoBasisQBEREstimator
 from qusec.detection.threshold import ThresholdEngine
@@ -17,6 +17,7 @@ from qusec.session.manager import SessionManager
 from qusec.quantum.entanglement import EntanglementEngine
 from qusec.quantum.teleport import QuantumTeleportationEngine
 from qusec.crypto.otp import OneTimePad
+from qusec.crypto.quantum_keys import QuantumKeyPair, QuantumPublicKey, QuantumPrivateKey
 
 __all__ = [
     "bell_pair",
@@ -36,6 +37,9 @@ __all__ = [
     "EntanglementEngine",
     "QuantumTeleportationEngine",
     "OneTimePad",
+    "QuantumKeyPair",
+    "QuantumPublicKey",
+    "QuantumPrivateKey",
     "run_doctor",
     "__version__",
 ]

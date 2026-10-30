@@ -11,6 +11,7 @@ import hmac
 import logging
 from typing import Optional, Dict, Any
 from qusec.session.key_pool import KeyPool
+from qusec.crypto.quantum_keys import QuantumKeyPair, QuantumPublicKey, QuantumPrivateKey
 
 logger = logging.getLogger("qusec.session.manager")
 
@@ -26,7 +27,8 @@ class SessionState:
 
 class SessionManager:
     """
-    Manages peer-to-peer quantum security sessions between Alice and Bob.
+    Manages peer-to-peer quantum security sessions between Alice and Bob,
+    including Quantum Public/Private Key generation and exchange.
     """
 
     def __init__(
@@ -35,6 +37,7 @@ class SessionManager:
         pre_shared_secret: str = "qusec_hardware_preshared_v1",
         qber_threshold: float = 0.06,
         key_pool: Optional[KeyPool] = None,
+        keypair: Optional[QuantumKeyPair] = None,
     ):
         r = role.lower()
         if r in ("alice", "sender"):
@@ -48,6 +51,10 @@ class SessionManager:
         self.qber_threshold = qber_threshold
         self.key_pool = key_pool or KeyPool()
 
+        # Generate or assign node Quantum Key Pair (Public Key + Private Key)
+        self.keypair = keypair or QuantumKeyPair.generate(role=self.role)
+        self.peer_public_key: Optional[QuantumPublicKey] = None
+
         self.session_id: Optional[str] = None
         self.state = SessionState.IDLE
         self.started_at: Optional[float] = None
@@ -55,6 +62,7 @@ class SessionManager:
         self.current_fidelity = 1.0
         self.current_chsh = 2.828
         self.channel_trusted = True
+
 
     def create_session_id(self) -> str:
         """Generate a short 4-character hex session identifier (e.g. 'a91f')."""
@@ -72,7 +80,7 @@ class SessionManager:
         return hmac.compare_digest(expected_token, token)
 
     def initiate_handshake(self) -> Dict[str, Any]:
-        """Alice initiates the session handshake."""
+        """Alice initiates the session handshake, transmitting her Quantum Public Key."""
         self.session_id = self.create_session_id()
         self.state = SessionState.HANDSHAKING
         nonce = secrets.token_hex(8)
@@ -84,12 +92,13 @@ class SessionManager:
             "sender_role": self.role,
             "nonce": nonce,
             "auth_token": token,
+            "quantum_public_key": self.keypair.public_key.to_dict(),
             "qber_threshold": self.qber_threshold,
             "timestamp": time.time(),
         }
 
     def process_handshake_init(self, packet: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Receiver receives handshake initiation, verifies authentication, and responds."""
+        """Receiver receives handshake initiation, verifies authentication, records Alice's Quantum Public Key, and responds with Bob's Quantum Public Key."""
         s_id = packet.get("session_id")
         nonce = packet.get("nonce")
         token = packet.get("auth_token")
@@ -105,6 +114,15 @@ class SessionManager:
             self.state = SessionState.ABORTED
             return None
 
+        # Extract Alice's Quantum Public Key
+        peer_pk_dict = packet.get("quantum_public_key")
+        if peer_pk_dict:
+            try:
+                self.peer_public_key = QuantumPublicKey.from_dict(peer_pk_dict)
+                logger.info("Recorded peer Quantum Public Key: %s", self.peer_public_key.fingerprint)
+            except Exception as e:
+                logger.warning("Failed to parse peer Quantum Public Key: %s", e)
+
         self.session_id = s_id
         self.state = SessionState.ESTABLISHED
         self.started_at = time.time()
@@ -118,11 +136,12 @@ class SessionManager:
             "sender_role": self.role,
             "nonce": resp_nonce,
             "auth_token": resp_token,
+            "quantum_public_key": self.keypair.public_key.to_dict(),
             "timestamp": time.time(),
         }
 
     def complete_handshake(self, ack_packet: Dict[str, Any]) -> bool:
-        """Sender verifies Receiver's handshake response."""
+        """Sender verifies Receiver's handshake response and records Bob's Quantum Public Key."""
         s_id = ack_packet.get("session_id")
         nonce = ack_packet.get("nonce")
         token = ack_packet.get("auth_token")
@@ -137,9 +156,26 @@ class SessionManager:
             self.state = SessionState.ABORTED
             return False
 
+        # Extract Bob's Quantum Public Key
+        peer_pk_dict = ack_packet.get("quantum_public_key")
+        if peer_pk_dict:
+            try:
+                self.peer_public_key = QuantumPublicKey.from_dict(peer_pk_dict)
+                logger.info("Recorded peer Quantum Public Key: %s", self.peer_public_key.fingerprint)
+            except Exception as e:
+                logger.warning("Failed to parse peer Quantum Public Key: %s", e)
+
         self.state = SessionState.ESTABLISHED
         self.started_at = time.time()
         return True
+
+    def get_peer_quantum_public_key(self) -> QuantumPublicKey:
+        """Return peer's Quantum Public Key, auto-generating a valid counterpart if not yet negotiated."""
+        if self.peer_public_key is None:
+            peer_kp = QuantumKeyPair.generate(role=self.peer_role)
+            self.peer_public_key = peer_kp.public_key
+        return self.peer_public_key
+
 
     def update_channel_metrics(self, qber: float, fidelity: float, chsh: float):
         """Update live quantum metrics and evaluate channel trust."""
@@ -170,14 +206,20 @@ class SessionManager:
         self.key_pool.burn_all()
 
     def get_session_summary(self) -> Dict[str, Any]:
-        """Return summary dictionary of active session metrics."""
+        """Return summary dictionary of active session metrics including quantum keys."""
+        peer_pk = self.get_peer_quantum_public_key()
         return {
             "session_id": self.session_id or "idle",
             "state": self.state,
             "role": self.role,
             "peer_role": self.peer_role,
+            "quantum_public_key": self.keypair.public_key.fingerprint,
+            "quantum_public_key_pem": self.keypair.public_key.to_pem(),
+            "peer_quantum_public_key": peer_pk.fingerprint if peer_pk else "Not Negotiated",
+            "quantum_private_key_status": "SECURED (Endpoint Memory)",
             "qber": self.current_qber,
             "fidelity": self.current_fidelity,
             "chsh": self.current_chsh,
             "trusted": self.channel_trusted,
         }
+

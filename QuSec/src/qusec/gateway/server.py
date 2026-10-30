@@ -274,12 +274,23 @@ def make_gateway_handler(context: GatewayContext):
                 role_title = "Sender" if context.node_role == "sender" else "Receiver"
                 peer_title = "Receiver" if role_title == "Sender" else "Sender"
                 session_ready = context.session_mgr.state == "ESTABLISHED"
+                peer_pk = context.session_mgr.get_peer_quantum_public_key()
                 data = {
                     "status": "ONLINE",
                     "role": role_title,
                     "peer_role": peer_title,
                     "session_id": context.session_mgr.session_id or "idle",
                     "session_established": session_ready,
+                    "quantum_public_key": context.session_mgr.keypair.public_key.fingerprint,
+                    "peer_quantum_public_key": peer_pk.fingerprint if peer_pk else "Not Negotiated",
+                    "quantum_keys": {
+                        "public_key": context.session_mgr.keypair.public_key.fingerprint,
+                        "public_key_pem": context.session_mgr.keypair.public_key.to_pem(),
+                        "peer_public_key": peer_pk.fingerprint if peer_pk else "Not Negotiated",
+                        "private_key_status": "SECURED (Endpoint Memory)",
+                        "encryption_scheme": "Receiver Public Key (RSA-OAEP 2048)",
+                        "signature_scheme": "Sender Private Key QDS (RSA-PSS SHA256)",
+                    },
                     "key_pool": pool_status,
                     "channel": {
                         "fibre_ok": context.hardware_state["fibre_ok"],
@@ -290,9 +301,10 @@ def make_gateway_handler(context: GatewayContext):
                         "trusted": context.session_mgr.channel_trusted,
                     },
                     "pipeline": context.pipeline_state,
-                    "security_model": "laptop-to-laptop quantum-secure (keys and encryption reside on laptop endpoints; browser-to-gateway hop is local plaintext)",
+                    "security_model": "laptop-to-laptop quantum-secure (quantum asymmetric keys & QDS signature on endpoints; optical fibre & ESP32 transport)",
                 }
                 self._send_json_response(200, data)
+
 
             elif path in ("/api/messages", "/messages"):
                 self._send_json_response(200, {

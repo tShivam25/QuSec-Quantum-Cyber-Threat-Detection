@@ -105,7 +105,11 @@ def cmd_send(args):
             console.print(f"[bold green]✔ Message sent successfully via {mode.upper()}![/bold green]")
             console.print(f"  • Recipient: [cyan]{recipient}[/cyan]")
             console.print(f"  • Message: \"{message}\"")
-            console.print(f"  • Security: [bold yellow]Laptop-to-laptop quantum-secure[/bold yellow]")
+            if "recipient_public_key" in result:
+                console.print(f"  • Receiver Quantum Public Key: [bold green]{result['recipient_public_key']}[/bold green] (Encrypted Payload)")
+            if "sender_private_key" in result:
+                console.print(f"  • Sender Quantum Private Key: [bold yellow]{result['sender_private_key']}[/bold yellow] (Encrypted Signature)")
+            console.print(f"  • Security: [bold yellow]Quantum Asymmetric Public-Key + QDS Signed[/bold yellow]")
             if "qubits_teleported" in result:
                 console.print(f"  • Qubits teleported: {result['qubits_teleported']}")
             if "bits_consumed" in result:
@@ -121,8 +125,13 @@ def cmd_send(args):
         console.print(f"[bold green]✔ Message delivered via {mode.upper()}![/bold green]")
         console.print(f"  • Recipient: [cyan]{recipient}[/cyan]")
         console.print(f"  • Message: \"{message}\"")
-        console.print(f"  • Security: [bold yellow]Laptop-to-laptop quantum-secure[/bold yellow]")
+        if "recipient_public_key" in res:
+            console.print(f"  • Receiver Quantum Public Key: [bold green]{res['recipient_public_key']}[/bold green] (Encrypted Payload)")
+        if "sender_private_key" in res:
+            console.print(f"  • Sender Quantum Private Key: [bold yellow]{res['sender_private_key']}[/bold yellow] (Encrypted Signature)")
+        console.print(f"  • Security: [bold yellow]Quantum Asymmetric Public-Key + QDS Signed[/bold yellow]")
         return 0
+
 
 
 def cmd_node(args):
@@ -150,14 +159,13 @@ def cmd_node(args):
 
 
 def cmd_gateway(args):
-    """Handle 'qusec gateway' command."""
+    """Handle 'qusec gateway' and 'qusec bridge' command - Live Transmission Monitor."""
     role = getattr(args, "role", "sender")
     force_sim = getattr(args, "sim", False)
-    gateway_port = getattr(args, "port", 8765)
+    gateway_port = getattr(args, "port", None)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
     esp32_port = getattr(args, "esp32_port", None)
 
-    console.print(f"[bold cyan]Starting QuSec Platform Bridge Gateway on http://0.0.0.0:{gateway_port}...[/bold cyan]")
     node = QuSecNode(
         role=role,
         peer_host=peer_host,
@@ -165,30 +173,12 @@ def cmd_gateway(args):
         esp32_port=esp32_port,
         force_simulation=force_sim,
     )
-    node.initialize()
-    role_title = "Sender" if role.lower() in ("alice", "sender") else "Receiver"
-    console.print(f"[bold green]✔ QuSec Gateway is ready for social media platform integration ({role_title}).[/bold green]")
-    console.print(f"  Endpoints:")
-    console.print(f"  • Web Chat UI:  http://127.0.0.1:{gateway_port}/")
-    console.print(f"  • Status:       GET  http://127.0.0.1:{gateway_port}/api/status")
-    console.print(f"  • Send:         POST http://127.0.0.1:{gateway_port}/api/send")
-    console.print(f"  • Events:       GET  http://127.0.0.1:{gateway_port}/api/events (SSE stream)")
-    console.print(f"  • Init:         POST http://127.0.0.1:{gateway_port}/api/session/init")
-    console.print(f"  • Rekey:        POST http://127.0.0.1:{gateway_port}/api/rekey")
-    console.print(f"\n[dim]Press Ctrl+C to terminate gateway.[/dim]")
-
-    try:
-        while True:
-            import time
-            time.sleep(1.0)
-    except KeyboardInterrupt:
-        node.stop()
-        console.print("\n[yellow]Gateway stopped.[/yellow]")
+    node.run_transmission_monitor()
     return 0
 
 
 def cmd_chat(args):
-    """Handle 'qusec chat' command - continuous interactive quantum chat."""
+    """Handle 'qusec chat' command - continuous interactive quantum chat or transmission monitor."""
     role = getattr(args, "role", "sender")
     peer_host = getattr(args, "peer_host", "127.0.0.1")
     force_sim = getattr(args, "sim", False)
@@ -196,6 +186,7 @@ def cmd_chat(args):
     classical_port = getattr(args, "classical_port", None)
     gateway_port = getattr(args, "gateway_port", None)
     esp32_port = getattr(args, "esp32_port", None)
+    is_monitor = getattr(args, "monitor", False) or getattr(args, "no_prompt", False)
 
     node = QuSecNode(
         role=role,
@@ -206,7 +197,10 @@ def cmd_chat(args):
         esp32_port=esp32_port,
         force_simulation=force_sim,
     )
-    node.run_interactive_chat()
+    if is_monitor:
+        node.run_transmission_monitor()
+    else:
+        node.run_interactive_chat()
     return 0
 
 
@@ -234,23 +228,34 @@ def main():
     node_parser.add_argument("--hardware", action="store_true", help="Prefer physical hardware links")
     node_parser.add_argument("--duration", type=int, default=None, help="Run for N seconds then exit")
 
-    # 3. qusec chat (continuous interactive terminal chat)
-    chat_parser = subparsers.add_parser("chat", help="Start continuous interactive two-way quantum chat")
+    # 3. qusec bridge (Live transmission monitor connected to Shnik website)
+    bridge_parser = subparsers.add_parser("bridge", help="Connect terminal to https://shnik-lake.vercel.app, ESP32, and optical link in live transmission monitor mode")
+    bridge_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob"], default="sender", help="Node role: sender or receiver (default: sender)")
+    bridge_parser.add_argument("--peer-host", default="127.0.0.1", help="Peer IP address (default: 127.0.0.1)")
+    bridge_parser.add_argument("--port", type=int, default=None, help="Gateway HTTP port (default: 8765 for sender, 8766 for receiver)")
+    bridge_parser.add_argument("--esp32-port", default=None, help="ESP32 serial port")
+    bridge_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
+
+    # 4. qusec chat (continuous interactive terminal chat or monitor)
+    chat_parser = subparsers.add_parser("chat", help="Start continuous quantum chat or live transmission monitor")
     chat_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob"], default="sender", help="Node role: sender or receiver (default: sender)")
     chat_parser.add_argument("--peer-host", default="127.0.0.1", help="Peer IP address (default: 127.0.0.1)")
     chat_parser.add_argument("--optical-port", type=int, default=None, help="Optical channel UDP port")
     chat_parser.add_argument("--classical-port", type=int, default=None, help="Classical channel UDP port")
     chat_parser.add_argument("--gateway-port", type=int, default=None, help="HTTP API gateway port")
     chat_parser.add_argument("--esp32-port", default=None, help="ESP32 serial port")
+    chat_parser.add_argument("--monitor", action="store_true", help="Run in Live Transmission Monitor mode without typing in terminal")
+    chat_parser.add_argument("--no-prompt", action="store_true", help="Disable terminal message prompt and stream website transmissions")
     chat_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
 
-    # 4. qusec gateway
-    gateway_parser = subparsers.add_parser("gateway", help="Run platform bridge API gateway")
+    # 5. qusec gateway
+    gateway_parser = subparsers.add_parser("gateway", help="Run platform bridge API gateway and transmission monitor")
     gateway_parser.add_argument("--role", choices=["sender", "receiver", "alice", "bob"], default="sender", help="Node role (default: sender)")
     gateway_parser.add_argument("--peer-host", default="127.0.0.1", help="Peer IP address (default: 127.0.0.1)")
-    gateway_parser.add_argument("--port", type=int, default=8765, help="Gateway HTTP port (default: 8765)")
+    gateway_parser.add_argument("--port", type=int, default=None, help="Gateway HTTP port (default: 8765)")
     gateway_parser.add_argument("--esp32-port", default=None, help="ESP32 serial port")
     gateway_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
+
 
     # 4. qusec keys
     keys_parser = subparsers.add_parser("keys", help="Display cryptographic key pool status")
@@ -300,8 +305,9 @@ def main():
     if args.command == "chat":
         return cmd_chat(args)
 
-    if args.command == "gateway":
+    if args.command in ("gateway", "bridge"):
         return cmd_gateway(args)
+
 
     if args.command == "keys":
         return cmd_keys(args)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qusec"
-version = "0.2.2"
+version = "0.2.3"
 description = "Quantum Security Framework for Quantum Digital Signature Threat Detection"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -13,7 +13,8 @@ dependencies = [
     "qiskit-aer~=0.17",
     "rich~=15.0",
     "pyserial~=3.5",
-    "websockets~=17.0"
+    "websockets~=17.0",
+    "cryptography>=42.0.0"
 ]
 authors = [
     { name = "QuSec Developers" }

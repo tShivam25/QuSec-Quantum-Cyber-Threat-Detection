@@ -14,6 +14,11 @@ It leverages Qiskit to simulate a quantum-safe teleportation-based QDS protocol 
 
 ## 🚀 Features
 
+- **Quantum Asymmetric Cryptosystem**: Generates `QuantumPublicKey` (`Q-PK-...`) and `QuantumPrivateKey` (`Q-SK-...`) pairs for Sender and Receiver. Encrypts plaintext payloads using the receiver's Quantum Public Key and signs/encrypts Quantum Digital Signatures (QDS) using the sender's Quantum Private Key.
+- **Dual Physical Channel Architecture**:
+  - **Optical Link (UDP 9876 / Glass Fiber)**: Carries flying qubits, Bell-state teleportation frames, and SARG04 decoy states.
+  - **ESP32 Classical Channel (UDP 9877 / USB Serial)**: Exchanges classical Pauli corrections ($c_0, c_1$), ciphertext payloads, QDS signatures, Wegman-Carter MACs, and drives the hardware threat alarm LED (GPIO 4).
+- **Web App Bridge Integration**: Seamless integration with the [Shnik Platform](https://shnik-lake.vercel.app) where the terminal streams live transmissions without requiring user terminal input.
 - **Teleportation-Based QDS**: Transmits signature payload using a 3-qubit Bell-state entanglement and Pauli corrections.
 - **SARG04 Protocol Integration**: Employs mathematical decoy states ($\mu$, $\nu$, vacuum) for sifting and quantum channel security.
 - **Attack Simulations**: Test real-time quantum threat vectors including Forgery, Impersonation, Intercept-Resend, Replay, and Channel Tampering.
@@ -134,8 +139,25 @@ Self-test verifying Python environment, ESP32 USB detection, hardware TRNG entro
 qusec doctor
 ```
 
-### 2. Continuous Interactive Quantum Chat (`qusec chat`)
-Runs continuous two-way interactive quantum chat directly in your terminal. Starts automatically as soon as users begin messaging, and loops continuously until turned off:
+### 2. Website & Platform Bridge Monitor (`qusec bridge`)
+Connects the terminal directly to the [Shnik Web App](https://shnik-lake.vercel.app), ESP32 classical channel, and optical quantum channel in **Live Transmission Monitor** mode:
+```bash
+# On Sender Laptop (Connected to ESP32 and Optical Transceiver):
+qusec bridge --role sender --peer-host <RECEIVER_OPTICAL_IP>
+
+# On Receiver Laptop:
+qusec bridge --role receiver --peer-host <SENDER_OPTICAL_IP>
+
+# Single Laptop Simulation Test:
+qusec bridge --role sender --sim
+qusec bridge --role receiver --sim --port 8766
+```
+- **Zero Terminal Message Prompting**: You do not type messages in the terminal. The terminal acts as a dedicated live transmission console.
+- **Real-Time Transmission Stream**: Messages triggered from the website or library commands (`qusec send`) instantly render outgoing quantum transmission tables on the sender and incoming security reports on the receiver.
+- **Quantum Public & Private Key Fingerprints**: Shows sender private key signing and receiver public key encryption in real time.
+
+### 3. Continuous Interactive Quantum Chat (`qusec chat`)
+Runs continuous two-way interactive quantum chat directly in your terminal:
 ```bash
 # On Sender Laptop:
 qusec chat --role sender
@@ -147,8 +169,9 @@ qusec chat --role receiver --peer-host <SENDER_IP>
 - Auto-initializes entanglement and key pool as soon as the first message is sent.
 - Concurrently runs the background Web Platform Gateway (`http://127.0.0.1:8765`) for social media website integration.
 - Loops continuously until you turn it off (`/quit` or `Ctrl+C`).
+- To run without typing prompt (monitor mode): `qusec chat --role sender --monitor`
 
-### 3. Interactive Node & Live UI Dashboard (`qusec node`)
+### 4. Interactive Node & Live UI Dashboard (`qusec node`)
 Launches the live operational terminal dashboard:
 ```bash
 # On Sender Laptop:
@@ -170,7 +193,7 @@ qusec node --role receiver --peer-host <SENDER_IP>
 └──────────────────────────────────────────────────────┘
 ```
 
-### 3. Social Media Platform Bridge Gateway (`qusec gateway`)
+### 5. Social Media Platform Bridge Gateway (`qusec gateway`)
 Starts the local REST + SSE platform bridge for web applications:
 ```bash
 qusec gateway --role sender --port 8765
@@ -180,17 +203,17 @@ qusec gateway --role sender --port 8765
 - `GET  /api/events` : Real-time Server-Sent Events (SSE) stream.
 - `POST /api/rekey`  : Trigger key pool replenishment round.
 
-### 4. Key Pool Inspector (`qusec keys`)
+### 6. Key Pool Inspector (`qusec keys`)
 Inspects active cryptographic key material, rekey triggers, and burn-on-use stats:
 ```bash
 qusec keys
 ```
 
-### 5. Quantum-Secure Send (`qusec send`)
+### 7. Quantum-Secure Send (`qusec send`)
 Transmits a message over the quantum link via state teleportation or One-Time-Pad:
 ```bash
-qusec send --to receiver "Hello Quantum Teleportation" --mode teleportation
-qusec send --to receiver "Top Secret" --mode otp
+qusec send "Hello Quantum Teleportation" --to receiver --mode teleportation
+qusec send "Top Secret" --to receiver --mode otp
 ```
 
 ---
