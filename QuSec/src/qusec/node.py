@@ -69,7 +69,11 @@ class QuSecNode:
         esp32_port: Optional[str] = None,
         force_simulation: bool = False,
         backend_type: str = "simulator",
+        verbose: bool = False,
+        correction_batch_size: Optional[int] = None,
     ):
+        self.verbose = verbose
+        self.correction_batch_size = correction_batch_size
         r = (role or "peer").lower()
         if r in ("peer_b", "bob", "2"):
             self.role = "receiver"
@@ -170,7 +174,7 @@ class QuSecNode:
         self.entanglement = EntanglementEngine(backend_type=self.backend_type)
         self.teleporter = QuantumTeleportationEngine(backend_type=self.backend_type)
         self.sarg04 = SARG04ProtocolEngine()
-        self.cascade = CascadeReconciler()
+        self.cascade = CascadeReconciler(verbose=self.verbose, correction_batch_size=self.correction_batch_size)
         self.privacy = PrivacyAmplifier()
 
         # Session & Keys
@@ -241,6 +245,7 @@ class QuSecNode:
             try:
                 fibre_ok = self.quantum_channel.link_ok
                 esp32_ok = self.classical_channel.esp32_ok
+                is_ready = bool(fibre_ok and esp32_ok)
 
                 # Update states if changed
                 if last_state is None or fibre_ok != last_state:
@@ -252,9 +257,11 @@ class QuSecNode:
                     )
                     self.gateway_ctx.hardware_state["fibre_ok"] = fibre_ok
                     self.gateway_ctx.hardware_state["esp32_ok"] = esp32_ok
+                    self.gateway_ctx.hardware_state["ready"] = is_ready
                     self.events.emit("hardware_status", {
                         "fibre_ok": fibre_ok,
                         "esp32_ok": esp32_ok,
+                        "ready": is_ready,
                         "is_simulation": self.force_simulation,
                     })
                     if not fibre_ok and not self.force_simulation:
@@ -282,9 +289,17 @@ class QuSecNode:
         # Check hardware indicators
         fibre_ok = self.quantum_channel.link_ok
         esp32_ok = self.classical_channel.esp32_ok
+        is_ready = bool(fibre_ok and esp32_ok)
         self.ui.set_hardware_status(fibre_ok=fibre_ok, esp32_ok=esp32_ok, is_simulation=self.force_simulation)
         self.gateway_ctx.hardware_state["fibre_ok"] = fibre_ok
         self.gateway_ctx.hardware_state["esp32_ok"] = esp32_ok
+        self.gateway_ctx.hardware_state["ready"] = is_ready
+        self.events.emit("hardware_status", {
+            "fibre_ok": fibre_ok,
+            "esp32_ok": esp32_ok,
+            "ready": is_ready,
+            "is_simulation": self.force_simulation,
+        })
 
         self.is_running = True
 
@@ -416,20 +431,21 @@ class QuSecNode:
         console = Console()
         table = Table(
             title="[bold cyan]══ 🚀 QUSEC OUTGOING QUANTUM TRANSMISSION ══[/bold cyan]",
-            box=box.SQUARE,
+            box=box.ROUNDED,
             show_header=True,
-            header_style="bold white",
+            header_style="bold cyan",
+            border_style="cyan",
         )
-        table.add_column("Parameter", style="cyan", width=32)
+        table.add_column("Parameter", style="bold cyan", width=32)
         table.add_column("Value / Measurement", style="white")
 
-        table.add_row("Session ID", session_id)
-        table.add_row("Transmission Direction", f"{self.role_title} ➔ {recipient_name}")
+        table.add_row("Session ID", f"[bold white]{session_id}[/bold white]")
+        table.add_row("Transmission Direction", f"[bold green]{self.role_title}[/bold green] ➔ [bold yellow]{recipient_name}[/bold yellow]")
         table.add_row("Channel Architecture", "Full-Duplex Dual Mode (Bidirectional Sender & Receiver)")
         table.add_row("Execution Backend", f"[bold magenta]{self.backend_label}[/bold magenta]")
-        table.add_row("Plaintext Message", f"\"{message}\"")
-        table.add_row("Receiver Quantum Public Key", f"[bold green]{recipient_pk_fingerprint}[/bold green] (Encrypted Payload)")
-        table.add_row("Sender Quantum Private Key", f"[bold yellow]{sender_sk_fingerprint}[/bold yellow] (Signed Digital Signature)")
+        table.add_row("Plaintext Message", f"[bold white]\"{message}\"[/bold white]")
+        table.add_row("Receiver Quantum Public Key", f"[bold green]{recipient_pk_fingerprint}[/bold green] [dim](Encrypted Payload)[/dim]")
+        table.add_row("Sender Quantum Private Key", f"[bold yellow]{sender_sk_fingerprint}[/bold yellow] [dim](Signed QDS Signature)[/dim]")
         table.add_row("Ciphertext Snippet", f"[dim]{ciphertext_snippet}[/dim]")
         table.add_row("Encrypted QDS Signature", f"[dim]{signature_snippet}[/dim]")
         table.add_row("Optical Channel (Fibre)", f"{total_qubits} Qubits Dispatched (Port {self.optical_port})")
@@ -445,7 +461,7 @@ class QuSecNode:
 
         console.print("\n")
         console.print(table)
-        console.print("[bold green]✔ Transmission dispatched across Quantum & Classical Links![/bold green]\n")
+        console.print("[bold white on dark_blue]  ✔ Transmission dispatched across Quantum & Classical Links!  [/bold white on dark_blue]\n")
 
     def send_message(self, recipient: str, message: str, mode: str = "teleportation") -> Dict[str, Any]:
         """
@@ -740,7 +756,7 @@ class QuSecNode:
                 if c_pkt:
                     self._handle_incoming_classical_packet(c_pkt)
             except Exception as e:
-                logger.debug("Listener loop exception: %s", e)
+                logger.error("Listener loop exception processing packet: %s", e, exc_info=True)
                 time.sleep(0.04)
 
     def render_quantum_security_report(
@@ -763,6 +779,8 @@ class QuSecNode:
         sig_decision: Optional[str] = None,
         decrypted_message: Optional[str] = None,
         dyn_metrics: Optional[Dict[str, Any]] = None,
+        correction_logs: Optional[List[str]] = None,
+        effective_batch: Optional[int] = None,
     ):
         """
         Renders the full QuSec Quantum Security Report table in terminal,
@@ -770,23 +788,24 @@ class QuSecNode:
         """
         console = Console()
         table = Table(
-            title="[bold cyan]══ QUSEC QUANTUM SECURITY REPORT ══[/bold cyan]",
-            box=box.SQUARE,
+            title="[bold cyan]══ 🛡️  QUSEC QUANTUM SECURITY REPORT ══[/bold cyan]",
+            box=box.ROUNDED,
             show_header=True,
-            header_style="bold white",
+            header_style="bold cyan",
+            border_style="cyan",
         )
-        table.add_column("Parameter", style="cyan", width=32)
+        table.add_column("Parameter", style="bold cyan", width=32)
         table.add_column("Value / Measurement", style="white")
 
-        table.add_row("Session ID", session_id)
-        table.add_row("Transmission Link", f"{sender_name} ➔ {recipient_name} [Bidirectional Dual Mode]")
+        table.add_row("Session ID", f"[bold white]{session_id}[/bold white]")
+        table.add_row("Transmission Link", f"[bold yellow]{sender_name}[/bold yellow] ➔ [bold green]{recipient_name}[/bold green] [dim](Bidirectional Dual Mode)[/dim]")
         table.add_row("Execution Backend", f"[bold magenta]{self.backend_label}[/bold magenta]")
         table.add_row("Protocol", "Quantum Teleportation (3-Qubit Bell) + SARG04 Decoy + QDS")
 
         if recipient_sk_fingerprint:
-            table.add_row("Receiver Quantum Private Key", f"[bold yellow]{recipient_sk_fingerprint}[/bold yellow] (Decrypted Plaintext)")
+            table.add_row("Receiver Quantum Private Key", f"[bold yellow]{recipient_sk_fingerprint}[/bold yellow] [dim](Decrypted Plaintext)[/dim]")
         if sender_pk_fingerprint:
-            table.add_row("Sender Quantum Public Key", f"[bold green]{sender_pk_fingerprint}[/bold green] (Verified Signature)")
+            table.add_row("Sender Quantum Public Key", f"[bold green]{sender_pk_fingerprint}[/bold green] [dim](Verified Signature)[/dim]")
         if sig_decision:
             sig_col = "bold green" if ("VERIFIED" in sig_decision or "Verified" in sig_decision) else "bold red"
             table.add_row("Quantum Digital Signature", f"[{sig_col}]{sig_decision}[/{sig_col}]")
@@ -794,13 +813,36 @@ class QuSecNode:
             table.add_row("Decrypted Message Plaintext", f"[bold white]\"{decrypted_message}\"[/bold white]")
 
         table.add_row("Transmitted Qubits", f"{total_qubits} qubits (Optical Transceiver Port {self.optical_port})")
+
+        # Pauli Correction granularity (Addendum Part B)
+        eff_b = effective_batch or (1 if self.verbose else (self.correction_batch_size or 10))
+        mode_desc = f"[bold yellow]1-Bit Granular (--verbose active)[/bold yellow]" if eff_b == 1 else f"[bold cyan]{eff_b}-Bit Batched Summary[/bold cyan]"
+        table.add_row("Pauli Correction Mode", mode_desc)
         table.add_row("Pauli X Corrections (c1=1)", f"{pauli_x_count} Applied (Wireless ESP32)")
         table.add_row("Pauli Z Corrections (c0=1)", f"{pauli_z_count} Applied (Wireless ESP32)")
+
+        if correction_logs:
+            if eff_b == 1:
+                sample_cl = "\n".join(correction_logs[:6])
+                if len(correction_logs) > 6:
+                    sample_cl += f"\n... +{len(correction_logs) - 6} more bit corrections"
+                table.add_row("Granular Bit Corrections", f"[dim yellow]{sample_cl}[/dim yellow]")
+            else:
+                sample_cl = "\n".join(correction_logs[:5])
+                if len(correction_logs) > 5:
+                    sample_cl += f"\n... +{len(correction_logs) - 5} more batches"
+                table.add_row("Batched Corrections", f"[dim cyan]{sample_cl}[/dim cyan]")
+
         table.add_row("Conclusive Sifted Qubits (μ)", str(conclusive_sifted))
         table.add_row("Detected Quantum Bit Errors", str(detected_errors))
 
+        # Visual telemetry meter for QBER
         qber_color = "bold red" if calculated_qber > threshold else "bold green"
-        table.add_row("Calculated QBER (Q_meas)", f"[{qber_color}]{calculated_qber:.4f} ({calculated_qber * 100:.2f}%)[/{qber_color}]")
+        qber_pct = min(1.0, calculated_qber / max(0.01, threshold * 1.5))
+        filled = int(qber_pct * 12)
+        bar = "█" * filled + "░" * (12 - filled)
+        qber_meter = f" [{bar}]"
+        table.add_row("Calculated QBER (Q_meas)", f"[{qber_color}]{calculated_qber:.4f} ({calculated_qber * 100:.2f}%){qber_meter}[/{qber_color}]")
         table.add_row("Hoeffding Margin (ε, δ=10⁻³)", f"{hoeffding_eps:.4f} ({hoeffding_eps * 100:.2f}%) [99.9% Conf.]")
 
         if dyn_metrics:
@@ -831,8 +873,10 @@ class QuSecNode:
 
         console.print("\n")
         console.print(table)
-        color = "green" if decision == "VERIFIED" else "red"
-        console.print(f"[bold {color}]FINAL DECISION: {decision}[/bold {color}]\n")
+        if decision == "VERIFIED":
+            console.print("[bold white on dark_green]  ✔ FINAL DECISION: VERIFIED · QUANTUM INTEGRITY CONFIRMED  [/bold white on dark_green]\n")
+        else:
+            console.print(f"[bold white on dark_red]  ✖ FINAL DECISION: {decision} · SECURITY THREAT DETECTED  [/bold white on dark_red]\n")
 
         report_data = {
             "session_id": session_id,
@@ -930,6 +974,33 @@ class QuSecNode:
             pauli_x_count = sum(1 for c1 in c1_bits if c1 == 1)
             pauli_z_count = sum(1 for c0 in c0_bits if c0 == 1)
             recovered_bits = bob_qubits if bob_qubits else [0 if (c0 ^ c1) == 0 else 1 for c0, c1 in zip(c0_bits, c1_bits)]
+
+            # Granular reporting based on --verbose and correction_batch_size (Addendum Part B)
+            effective_batch = 1 if self.verbose else (self.correction_batch_size or 10)
+            correction_logs: List[str] = []
+            if effective_batch == 1:
+                # 1-bit granularity on --verbose
+                for idx, (c0, c1) in enumerate(zip(c0_bits, c1_bits)):
+                    if c1 == 1 or c0 == 1:
+                        ops = []
+                        if c1 == 1:
+                            ops.append("Pauli-X")
+                        if c0 == 1:
+                            ops.append("Pauli-Z")
+                        correction_logs.append(f"[Bit {idx:03d}] Applied {' + '.join(ops)} correction")
+            else:
+                # 10-bit batched summary on default
+                num_qubits = len(c0_bits)
+                for start_idx in range(0, num_qubits, effective_batch):
+                    end_idx = min(start_idx + effective_batch, num_qubits)
+                    chunk_c0 = c0_bits[start_idx:end_idx]
+                    chunk_c1 = c1_bits[start_idx:end_idx]
+                    chunk_x = sum(1 for b in chunk_c1 if b == 1)
+                    chunk_z = sum(1 for b in chunk_c0 if b == 1)
+                    if chunk_x > 0 or chunk_z > 0:
+                        correction_logs.append(
+                            f"[Bits {start_idx:03d}-{end_idx - 1:03d}] {chunk_x + chunk_z} corrections ({chunk_x} X, {chunk_z} Z)"
+                        )
 
             # 2. Decrypt message using Receiver's Quantum Private Key
             decrypted_text = ""
@@ -1069,6 +1140,8 @@ class QuSecNode:
                 sig_decision=sig_status,
                 decrypted_message=decrypted_text,
                 dyn_metrics=dyn_metrics,
+                correction_logs=correction_logs,
+                effective_batch=effective_batch,
             )
 
             # 8. Show Message / Security Alert

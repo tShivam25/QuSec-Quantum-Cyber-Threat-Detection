@@ -186,6 +186,8 @@ def cmd_node(args):
     duration = getattr(args, "duration", None)
     esp32_port = getattr(args, "esp32_port", None)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
+    verbose = getattr(args, "verbose", False)
+    batch_size = getattr(args, "correction_batch_size", None)
 
     node = QuSecNode(
         role=role,
@@ -198,6 +200,8 @@ def cmd_node(args):
         esp32_port=esp32_port,
         force_simulation=force_sim,
         backend_type=backend_type,
+        verbose=verbose,
+        correction_batch_size=batch_size,
     )
     node.run_live(duration_seconds=duration)
     return 0
@@ -209,6 +213,8 @@ def cmd_gateway(args):
     force_sim = getattr(args, "sim", False)
     peer_host = getattr(args, "peer_host", "127.0.0.1")
     esp32_port = getattr(args, "esp32_port", None)
+    verbose = getattr(args, "verbose", False)
+    batch_size = getattr(args, "correction_batch_size", None)
 
     node = QuSecNode(
         role=role,
@@ -221,6 +227,8 @@ def cmd_gateway(args):
         esp32_port=esp32_port,
         force_simulation=force_sim,
         backend_type=backend_type,
+        verbose=verbose,
+        correction_batch_size=batch_size,
     )
     node.run_transmission_monitor()
     return 0
@@ -233,6 +241,8 @@ def cmd_chat(args):
     force_sim = getattr(args, "sim", False)
     esp32_port = getattr(args, "esp32_port", None)
     is_monitor = getattr(args, "monitor", False) or getattr(args, "no_prompt", False)
+    verbose = getattr(args, "verbose", False)
+    batch_size = getattr(args, "correction_batch_size", None)
 
     node = QuSecNode(
         role=role,
@@ -245,6 +255,8 @@ def cmd_chat(args):
         esp32_port=esp32_port,
         force_simulation=force_sim,
         backend_type=backend_type,
+        verbose=verbose,
+        correction_batch_size=batch_size,
     )
     if is_monitor:
         node.run_transmission_monitor()
@@ -325,6 +337,8 @@ def main():
     node_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
     node_parser.add_argument("--hardware", action="store_true", help="Prefer physical hardware links")
     node_parser.add_argument("--duration", type=int, default=None, help="Run for N seconds then exit")
+    node_parser.add_argument("--verbose", action="store_true", help="Report error corrections at 1-bit granularity")
+    node_parser.add_argument("--correction-batch-size", type=int, default=None, help="Batch size for correction reporting (default: 1 in verbose, 10 otherwise)")
 
     # 3. qusec bridge (Live transmission monitor connected to Shnik website)
     bridge_parser = subparsers.add_parser("bridge", help="Connect terminal to https://shnik-lake.vercel.app, ESP32, and optical link in live dual-mode transmission monitor")
@@ -338,6 +352,8 @@ def main():
     bridge_parser.add_argument("--classical-port", type=int, default=None, help="Classical channel UDP port")
     bridge_parser.add_argument("--esp32-port", default=None, help="ESP32 serial port")
     bridge_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
+    bridge_parser.add_argument("--verbose", action="store_true", help="Report error corrections at 1-bit granularity")
+    bridge_parser.add_argument("--correction-batch-size", type=int, default=None, help="Batch size for correction reporting (default: 1 in verbose, 10 otherwise)")
 
     # 4. qusec chat (continuous interactive terminal chat or monitor)
     chat_parser = subparsers.add_parser("chat", help="Start continuous quantum chat or live transmission monitor")
@@ -353,6 +369,8 @@ def main():
     chat_parser.add_argument("--monitor", action="store_true", help="Run in Live Transmission Monitor mode without typing in terminal")
     chat_parser.add_argument("--no-prompt", action="store_true", help="Disable terminal message prompt and stream website transmissions")
     chat_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
+    chat_parser.add_argument("--verbose", action="store_true", help="Report error corrections at 1-bit granularity")
+    chat_parser.add_argument("--correction-batch-size", type=int, default=None, help="Batch size for correction reporting (default: 1 in verbose, 10 otherwise)")
 
     # 5. qusec gateway
     gateway_parser = subparsers.add_parser("gateway", help="Run platform bridge API gateway and transmission monitor")
@@ -366,6 +384,8 @@ def main():
     gateway_parser.add_argument("--classical-port", type=int, default=None, help="Classical channel UDP port")
     gateway_parser.add_argument("--esp32-port", default=None, help="ESP32 serial port")
     gateway_parser.add_argument("--sim", action="store_true", help="Force software simulation mode")
+    gateway_parser.add_argument("--verbose", action="store_true", help="Report error corrections at 1-bit granularity")
+    gateway_parser.add_argument("--correction-batch-size", type=int, default=None, help="Batch size for correction reporting (default: 1 in verbose, 10 otherwise)")
 
     # 6. qusec keys
     keys_parser = subparsers.add_parser("keys", help="Display cryptographic key pool status")

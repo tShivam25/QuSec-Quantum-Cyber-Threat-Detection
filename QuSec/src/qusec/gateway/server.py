@@ -177,15 +177,23 @@ def make_gateway_handler(context: GatewayContext):
 
             role_title = "Sender" if context.node_role == "sender" else "Receiver"
             peer_title = "Receiver" if role_title == "Sender" else "Sender"
+            fibre_ok = context.hardware_state.get("fibre_ok", True)
+            esp32_ok = context.hardware_state.get("esp32_ok", True)
+            is_ready = bool(fibre_ok and esp32_ok)
+
             init_pkt = {
                 "type": "status",
                 "session_id": context.session_mgr.session_id or "qusec-node-session",
                 "role": role_title,
                 "peer_role": peer_title,
+                "ready": is_ready,
+                "is_ready": is_ready,
                 "key_pool": context.key_pool.get_status(),
                 "channel": {
-                    "fibre_ok": context.hardware_state["fibre_ok"],
-                    "esp32_ok": context.hardware_state["esp32_ok"],
+                    "fibre_ok": fibre_ok,
+                    "esp32_ok": esp32_ok,
+                    "ready": is_ready,
+                    "is_ready": is_ready,
                     "qber": context.session_mgr.current_qber,
                     "fidelity": context.session_mgr.current_fidelity,
                     "chsh": context.session_mgr.current_chsh,
@@ -221,12 +229,19 @@ def make_gateway_handler(context: GatewayContext):
                                 }
                                 _send_ws_frame(self.connection, json.dumps(ws_msg))
                             elif e_name in ("hardware_status", "session_established"):
+                                cur_fibre = context.hardware_state.get("fibre_ok", True)
+                                cur_esp = context.hardware_state.get("esp32_ok", True)
+                                cur_ready = bool(cur_fibre and cur_esp)
                                 st_pkt = {
                                     "type": "status",
                                     "session_id": context.session_mgr.session_id or "qusec-node-session",
+                                    "ready": cur_ready,
+                                    "is_ready": cur_ready,
                                     "channel": {
-                                        "fibre_ok": context.hardware_state["fibre_ok"],
-                                        "esp32_ok": context.hardware_state["esp32_ok"],
+                                        "fibre_ok": cur_fibre,
+                                        "esp32_ok": cur_esp,
+                                        "ready": cur_ready,
+                                        "is_ready": cur_ready,
                                     },
                                     "key_pool": context.key_pool.get_status(),
                                 }
@@ -283,10 +298,17 @@ def make_gateway_handler(context: GatewayContext):
                 peer_pk = context.session_mgr.get_peer_quantum_public_key()
                 traffic_rate = context.threshold_engine.get_traffic_rate() if context.threshold_engine else 0.0
                 curr_q_th = context.threshold_engine.q_threshold if context.threshold_engine else 0.06
+                fibre_ok = context.hardware_state.get("fibre_ok", True)
+                esp32_ok = context.hardware_state.get("esp32_ok", True)
+                is_ready = bool(fibre_ok and esp32_ok)
+
                 data = {
                     "status": "ONLINE",
                     "role": role_title,
                     "peer_role": peer_title,
+                    "ready": is_ready,
+                    "is_ready": is_ready,
+                    "link_ok": is_ready,
                     "channel_mode": "dual-mode (bidirectional full-duplex)",
                     "backend": context.backend_name,
                     "backend_type": context.backend_type,
@@ -311,8 +333,10 @@ def make_gateway_handler(context: GatewayContext):
                     },
                     "key_pool": pool_status,
                     "channel": {
-                        "fibre_ok": context.hardware_state["fibre_ok"],
-                        "esp32_ok": context.hardware_state["esp32_ok"],
+                        "fibre_ok": fibre_ok,
+                        "esp32_ok": esp32_ok,
+                        "ready": is_ready,
+                        "is_ready": is_ready,
                         "qber": context.session_mgr.current_qber,
                         "fidelity": context.session_mgr.current_fidelity,
                         "chsh": context.session_mgr.current_chsh,
@@ -412,6 +436,26 @@ def make_gateway_handler(context: GatewayContext):
 
                 if not message_text:
                     self._send_json_response(400, {"error": "Missing message content"})
+                    return
+
+                # Link-gated check: do not transmit if physical link (fibre or ESP32) is down
+                fibre_ok = context.hardware_state.get("fibre_ok", True)
+                esp32_ok = context.hardware_state.get("esp32_ok", True)
+                is_ready = bool(fibre_ok and esp32_ok)
+                if not is_ready:
+                    reasons = []
+                    if not fibre_ok:
+                        reasons.append("Optical fibre link down / disconnected")
+                    if not esp32_ok:
+                        reasons.append("ESP32 classical link down / disconnected")
+                    reason_msg = " & ".join(reasons)
+                    self._send_json_response(503, {
+                        "success": False,
+                        "error": f"Physical link down: {reason_msg}",
+                        "fibre_ok": fibre_ok,
+                        "esp32_ok": esp32_ok,
+                        "ready": False,
+                    })
                     return
 
                 # Send via registered callback or direct simulation

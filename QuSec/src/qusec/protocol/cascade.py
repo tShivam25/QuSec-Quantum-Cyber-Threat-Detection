@@ -6,7 +6,7 @@ classical channel to reconcile bit discrepancies between Alice and Bob's sifted 
 
 import math
 import random
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 
 class CascadeReconciler:
@@ -16,9 +16,18 @@ class CascadeReconciler:
     - Subsequent passes: Randomly permute key with known seed, double block size, repeat.
     """
 
-    def __init__(self, target_qber: float = 0.02, num_passes: int = 4):
+    def __init__(
+        self,
+        target_qber: float = 0.02,
+        num_passes: int = 4,
+        verbose: bool = False,
+        correction_batch_size: Optional[int] = 10,
+    ):
         self.target_qber = max(0.001, target_qber)
         self.num_passes = num_passes
+        self.verbose = verbose
+        batch_size = 10 if correction_batch_size is None else correction_batch_size
+        self.correction_batch_size = 1 if verbose else max(1, batch_size)
 
     def _initial_block_size(self) -> int:
         """Heuristic block size k1 approx 0.73 / QBER."""
@@ -68,6 +77,9 @@ class CascadeReconciler:
             permuted_bob = [bob_current[p] for p in perm]
 
             # Process blocks
+            # NOTE: Polycorrection (the existing multi-bit / block-level correction stage
+            # in the SARG04 reconciliation pipeline) is intentionally excluded from
+            # verbosity-based batching per protocol specifications.
             block_size = k * (2 ** (pass_num - 1))
             num_blocks = (n + block_size - 1) // block_size
 
@@ -94,8 +106,23 @@ class CascadeReconciler:
                     permuted_bob[err_idx] = 1 - permuted_bob[err_idx]
                     total_corrected += 1
 
+                    # Verbosity-controlled bit-level correction reporting
+                    if self.correction_batch_size == 1:
+                        # 1-bit granularity: log each individual bit correction as it occurs
+                        print(f"  • [Bit Correction] Reconciled bit flip at permuted index {err_idx} (Pass {pass_num}) [Running total: {total_corrected}]", flush=True)
+                    elif total_corrected % self.correction_batch_size == 0:
+                        # Non-verbose default: batched summary every N bits
+                        b_start = total_corrected - self.correction_batch_size + 1
+                        print(f"  • [Correction Batch] Batched {self.correction_batch_size} bit corrections ({b_start}..{total_corrected}) [Running total: {total_corrected}]", flush=True)
+
             # Un-permute Bob's bits
             bob_current = [permuted_bob[inv_perm[i]] for i in range(n)]
+
+        # Print remaining batched corrections if not verbose and remainder exists
+        if self.correction_batch_size > 1 and (total_corrected % self.correction_batch_size != 0):
+            rem = total_corrected % self.correction_batch_size
+            b_start = total_corrected - rem + 1
+            print(f"  • [Correction Batch] Batched {rem} remaining bit corrections ({b_start}..{total_corrected}) [Running total: {total_corrected}]", flush=True)
 
         residual = sum(1 for a, b in zip(alice_bits, bob_current) if a != b)
 
