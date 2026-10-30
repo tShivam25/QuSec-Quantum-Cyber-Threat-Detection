@@ -2,12 +2,12 @@
 """
 QuSec Attacker Executable Entry Point (Eve - 3rd Laptop)
 ========================================================
-Runs the Claude Code styled QuSec Adversary CLI on the 3rd laptop.
+Runs the QuSec Adversary CLI on the 3rd laptop.
 Tampers with in-transit frames between Laptop A (Alice) and Laptop B (Bob)
 and triggers dynamic QBER security threshold alerts and physical ESP32 alarm LEDs.
 
 Usage:
-  Interactive Claude Code TUI:
+  Interactive Adversary TUI:
     python attacker_eve.py
 
   Targeting a Receiver across network:

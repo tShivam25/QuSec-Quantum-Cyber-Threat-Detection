@@ -113,9 +113,9 @@ qusec node --role receiver --peer-host <SENDER_IP>
 ```
 
 ### Launch Attacker Console on 3rd Laptop (`qusec attacker`)
-Connect the Attacker ESP32 to the 3rd laptop and start the Claude Code styled adversary console:
+Connect the Attacker ESP32 to the 3rd laptop and start the interactive adversary console:
 ```bash
-# Interactive Claude Code TUI:
+# Interactive Adversary TUI:
 qusec attacker --target-host <RECEIVER_IP>
 
 # Automated random in-between chat attacks:

@@ -335,10 +335,10 @@ qusec send "Hello Quantum Teleportation" --to receiver --mode teleportation --ba
 qusec send "Top Secret" --to receiver --mode otp
 ```
 
-### 8. QuSec Attacker & Claude Code TUI Adversary (`qusec attacker`)
+### 8. QuSec Attacker & Interactive Adversary Suite (`qusec attacker`)
 Run the adversary console (Eve) on the 3rd laptop connected to the Attacker ESP32:
 ```bash
-# Interactive Claude Code TUI session:
+# Interactive Adversary TUI session:
 qusec attacker --target-host <RECEIVER_IP>
 
 # Direct attack vector (non-interactive):

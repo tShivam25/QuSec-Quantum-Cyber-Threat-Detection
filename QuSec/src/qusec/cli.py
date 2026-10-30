@@ -305,7 +305,7 @@ def cmd_chat(args):
 
 
 def cmd_attack(args):
-    """Handle 'qusec attacker' / 'qusec attack' command - Claude Code TUI Adversary."""
+    """Handle 'qusec attacker' / 'qusec attack' command - Interactive Adversary TUI."""
     from qusec.attacker import QuSecAttacker
     target_host = getattr(args, "target_host", "127.0.0.1")
     target_classical_port = getattr(args, "target_classical_port", 9877)
@@ -461,8 +461,8 @@ def main():
     run_parser.add_argument("--debug", action="store_true", help="Enable debug output")
     run_parser.add_argument("--json", action="store_true", help="Output results in JSON format")
 
-    # 8. qusec attacker (Claude Code TUI Adversary)
-    atk_parser = subparsers.add_parser("attacker", aliases=["attack"], help="Launch QuSec Attacker (Eve) with Claude Code TUI")
+    # 8. qusec attacker (Interactive Adversary TUI)
+    atk_parser = subparsers.add_parser("attacker", aliases=["attack"], help="Launch QuSec Attacker (Eve) Interactive TUI")
     atk_parser.add_argument("--target-host", default="127.0.0.1", help="Target Receiver IP (default: 127.0.0.1 or 192.168.4.2)")
     atk_parser.add_argument("--target-classical-port", type=int, default=9877, help="Target classical UDP port (default: 9877, or 9879 for Bob)")
     atk_parser.add_argument("--target-optical-port", type=int, default=9876, help="Target optical UDP port (default: 9876, or 9878 for Bob)")

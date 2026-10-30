@@ -11,7 +11,7 @@ Simulates quantum and classical threat vectors against the QuSec Quantum Securit
 7. Random In-Between Chat Auto-Attack Engine (Automated stealth attacks while users chat)
 
 Terminal Interface:
-- Modeled after Claude Code: sleek dark typography, rounded containers, high density,
+- Sleek modern developer CLI: sleek dark typography, rounded containers, high density,
   command prompt, live telemetry, and slash command integration.
 """
 
@@ -257,7 +257,7 @@ class QuSecAttacker:
     """
     Primary Adversary Demonstration Engine (Eve).
     Implements cyber threat vectors against classical and quantum transport channels.
-    Includes Claude Code TUI styling and automated random in-between chat attacks.
+    Includes modern developer TUI styling and automated random in-between chat attacks.
     """
 
     def __init__(
@@ -872,7 +872,7 @@ class QuSecAttacker:
             self._auto_thread = None
 
     def _render_auto_attack_notification(self, attack_name: str, detail: str):
-        """Render discrete Claude Code style auto-attack alert."""
+        """Render discrete adversary auto-attack alert."""
         if HAS_RICH and self.console:
             t = time.strftime("%H:%M:%S")
             self.console.print(f"[dim]{t}[/dim] [bold red]⚡ [AUTO-ATTACK][/bold red] [cyan]{attack_name}[/cyan] · [yellow]{detail}[/yellow]")
@@ -954,10 +954,10 @@ class QuSecAttacker:
             self._proxy_thread = None
 
     # =========================================================================
-    # CLAUDE CODE STYLED TUI DASHBOARDS & RENDERING
+    # ADVERSARY TUI DASHBOARDS & RENDERING
     # =========================================================================
-    def render_claude_banner(self):
-        """Render Claude Code styled adversary header container."""
+    def render_adversary_banner(self):
+        """Render adversary header container."""
         if not (HAS_RICH and self.console):
             print("\n=== QUSEC ADVERSARY SUITE (EVE) ===")
             print(f"Target: {self.target_host}:{self.target_classical_port}")
@@ -990,7 +990,7 @@ class QuSecAttacker:
         self.console.print(p)
 
     def render_attack_card(self, title: str, details: Dict[str, Any]):
-        """Render Claude Code styled attack execution card."""
+        """Render attack execution card."""
         if not (HAS_RICH and self.console):
             print(f"\n--- {title} ---")
             for k, v in details.items():
@@ -1022,7 +1022,7 @@ class QuSecAttacker:
         self.console.print(p)
 
     def print_help(self):
-        """Display Claude Code styled help guide."""
+        """Display adversary command guide."""
         if not (HAS_RICH and self.console):
             print("\nAvailable Commands:")
             print("  /attack <type>   - Inject attack: tamper, pauli, forge, replay, jam")
@@ -1055,13 +1055,13 @@ class QuSecAttacker:
         self.console.print(p)
 
     def run_interactive(self):
-        """Run interactive Claude Code styled CLI loop."""
+        """Run interactive adversary CLI loop."""
         if os.name != "nt":
             os.system("clear")
         else:
             os.system("cls")
 
-        self.render_claude_banner()
+        self.render_adversary_banner()
 
         while True:
             try:
@@ -1093,7 +1093,7 @@ class QuSecAttacker:
                         os.system("clear")
                     else:
                         os.system("cls")
-                    self.render_claude_banner()
+                    self.render_adversary_banner()
 
                 elif cmd in ("/attack", "attack", "1", "2", "3", "4", "5", "6"):
                     # Resolve vector
@@ -1185,7 +1185,7 @@ class QuSecAttacker:
                     self.render_attack_card("Attacker ESP32 Hardware Status", diag)
 
                 elif cmd in ("/stats", "/dash", "stats", "status"):
-                    self.render_claude_banner()
+                    self.render_adversary_banner()
 
                 else:
                     if HAS_RICH and self.console:
@@ -1203,7 +1203,7 @@ def main():
     """CLI entry point for qusec-attacker."""
     parser = argparse.ArgumentParser(
         prog="qusec-attacker",
-        description="QuSec Adversary & Threat Vector Demonstration Suite (Eve - Claude Code TUI)",
+        description="QuSec Adversary & Threat Vector Demonstration Suite (Eve)",
     )
     parser.add_argument("--target-host", default="127.0.0.1", help="Target Receiver IP (default: 127.0.0.1 or 192.168.4.2)")
     parser.add_argument("--target-classical-port", type=int, default=DEFAULT_CLASSICAL_PORT, help="Target classical UDP port (default: 9877, or 9879 for Bob)")
