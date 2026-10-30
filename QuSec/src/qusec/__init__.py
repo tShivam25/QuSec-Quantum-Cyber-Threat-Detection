@@ -2,7 +2,7 @@
 QuSec - Quantum Security Framework for Quantum Digital Signature Threat Detection
 """
 
-__version__ = "0.2.5"
+__version__ = "0.2.6"
 from qusec.quantum.bell import bell_pair, correct
 from qusec.detection.qber import qber, hoeffding_margin, theoretical_qber, TwoBasisQBEREstimator
 from qusec.detection.threshold import ThresholdEngine, DynamicThresholdEngine
