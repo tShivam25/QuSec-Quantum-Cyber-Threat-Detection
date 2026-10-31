@@ -181,6 +181,8 @@ def _resolve_peer_config(args):
 
     peer_h = getattr(args, "peer_host", "127.0.0.1")
     is_remote = peer_h not in ("127.0.0.1", "localhost", "0.0.0.0")
+    p_str = str(peer).strip().lower() if peer else ""
+    r_str = str(role).strip().lower() if role else ""
 
     if p_str in ("b", "2", "peer_b", "bob") or r_str in ("receiver", "bob", "peer_b"):
         role = "peer_b"
