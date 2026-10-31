@@ -179,12 +179,12 @@ def _resolve_peer_config(args):
     elif not role:
         role = "dual"
 
-    p_str = str(peer).strip().lower() if peer else ""
-    r_str = str(role).strip().lower() if role else ""
+    peer_h = getattr(args, "peer_host", "127.0.0.1")
+    is_remote = peer_h not in ("127.0.0.1", "localhost", "0.0.0.0")
 
     if p_str in ("b", "2", "peer_b", "bob") or r_str in ("receiver", "bob", "peer_b"):
         role = "peer_b"
-        gateway_port = gateway_port or 8766
+        gateway_port = gateway_port or (8765 if is_remote else 8766)
         optical_port = optical_port or 9878
         classical_port = classical_port or 9879
         peer_optical_port = peer_optical_port or 9876

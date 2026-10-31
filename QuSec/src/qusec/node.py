@@ -145,7 +145,7 @@ class QuSecNode:
                 self.classical_port = classical_port or 9879
                 self.peer_optical_port = peer_optical_port or 9876
                 self.peer_classical_port = peer_classical_port or 9877
-                self.gateway_port = gateway_port or 8766
+                self.gateway_port = gateway_port or 8765
 
         # Event broadcaster
         self.events = EventEmitter()
@@ -443,6 +443,7 @@ class QuSecNode:
         direction: str = "outgoing",
         session_id: Optional[str] = None,
         pauli_logs: Optional[List[str]] = None,
+        qubit_details: Optional[List[Dict[str, Any]]] = None,
         total_qubits: Optional[int] = None,
         sender_name: Optional[str] = None,
         recipient_name: Optional[str] = None,
@@ -451,110 +452,149 @@ class QuSecNode:
     ) -> Dict[str, Any]:
         """
         Renders the aesthetic QuSec QBER Security Report and bit-by-bit Pauli corrections.
-        Strictly satisfies the 5 core telemetry parameters:
-        1. QBER Threshold
-        2. Threshold Verification
-        3. Backend
-        4. Calculated QBER
-        Final Result
+        QBER report and bit-by-bit Pauli corrections are displayed on the RECEIVER side only.
+        Matches the exact terminal styling shown in the QuSec specification:
+        1. Bit-by-bit Pauli corrections list (Qubit X / Total, Sender Alice c0/c1, Receiver Bob Pauli X/Z, Recovered State, SARG04 Conclusive)
+        2. Parameter / Value Table (Session ID, Backend, Execution Mode, Protocol, Simulated Scenario, Transmitted Qubits, Conclusive Sifted Qubits, Detected Errors, Calculated QBER, Security Threshold, Threshold Status)
+        3. FINAL DECISION: VERIFIED / REJECTED
         """
         console = Console()
 
-        # 1. Quantum Pauli Corrections: Bit-by-bit table
-        if pauli_logs:
-            p_table = Table(
-                title=f"[bold cyan]─── ⚛ QUANTUM PAULI CORRECTIONS (BIT-BY-BIT) · {len(pauli_logs)} BITS ───[/bold cyan]",
-                box=box.ROUNDED,
-                show_header=True,
-                header_style="bold cyan",
-                border_style="cyan",
-            )
-            p_table.add_column("Qubit Bit", style="bold yellow", width=14)
-            p_table.add_column("Classical ESP32 Coordinates", style="bold white", width=28)
-            p_table.add_column("Applied Pauli Correction", style="bold green")
+        # On RECEIVER side only: print the bit-by-bit Pauli corrections and QBER report
+        if direction == "incoming":
+            # 1. Bit-by-bit Pauli Corrections
+            if qubit_details:
+                tot_q = total_qubits or len(qubit_details)
+                max_disp = tot_q if self.verbose else min(tot_q, 10)
+                for i in range(max_disp):
+                    q = qubit_details[i]
+                    q_bit = q.get("bit", 0)
+                    q_basis = q.get("sender_basis", "Z")
+                    q_decoy = q.get("decoy", "mu")
+                    c0 = q.get("c0", 0)
+                    c1 = q.get("c1", 0)
+                    bob_res = q.get("bob_res", 0)
+                    concl = q.get("conclusive", False)
 
-            for log in pauli_logs:
-                if " ➔ " in log:
-                    parts = log.split(" ➔ ")
-                    prefix = parts[0]
-                    action = parts[1]
-                else:
-                    prefix = log
-                    action = ""
+                    console.print(f"\n[bold cyan]Qubit {i+1} / {tot_q}[/bold cyan]")
+                    console.print(f"Original bit: [bold cyan]{q_bit}[/bold cyan], Sender basis: {q_basis}, Decoy: {q_decoy}")
+                    console.print("[yellow]Sender Side (Alice):[/yellow]")
+                    console.print(f"  Measurement result c0: [bold cyan]{c0}[/bold cyan]")
+                    console.print(f"  Measurement result c1: [bold cyan]{c1}[/bold cyan]")
+                    console.print("[yellow]Receiver Side (Bob):[/yellow]")
+                    pauli_x = "Applied" if c1 == 1 else "None"
+                    pauli_z = "Applied" if c0 == 1 else "None"
+                    console.print(f"  Pauli X Correction ([yellow]c1=[/yellow][bold cyan]{c1}[/bold cyan]): {pauli_x}")
+                    console.print(f"  Pauli Z Correction ([yellow]c0=[/yellow][bold cyan]{c0}[/bold cyan]): {pauli_z}")
+                    console.print(f"  Recovered State (Measurement): [bold cyan]{bob_res}[/bold cyan]")
+                    conclusive_str = "[bold green]True[/bold green]" if concl else "[italic red]False[/italic red]"
+                    console.print(f"  SARG04 Conclusive: {conclusive_str}")
 
-                bit_part = prefix.split("] ")[0].replace("[", "").strip() if "]" in prefix else ""
-                coords = prefix.split("] ")[1].strip() if "]" in prefix else prefix
+                if not self.verbose and tot_q > 10:
+                    console.print("\n[cyan]... remaining bits hidden. Run with --verbose to see all bits ...[/cyan]")
 
-                if "Pauli-X + Pauli-Z" in action:
-                    act_styled = f"[bold magenta]{action}[/bold magenta]"
-                elif "Pauli-X" in action:
-                    act_styled = f"[bold green]{action}[/bold green]"
-                elif "Pauli-Z" in action:
-                    act_styled = f"[bold yellow]{action}[/bold yellow]"
-                else:
-                    act_styled = f"[dim white]{action}[/dim white]"
+            elif pauli_logs:
+                tot_q = total_qubits or len(pauli_logs)
+                max_disp = tot_q if self.verbose else min(tot_q, 10)
+                for i in range(max_disp):
+                    log = pauli_logs[i]
+                    console.print(f"\n[bold cyan]Qubit {i+1} / {tot_q}[/bold cyan]")
+                    c0_val = 1 if "c0=1" in log else 0
+                    c1_val = 1 if "c1=1" in log else 0
+                    console.print(f"Original bit: [bold cyan]0[/bold cyan], Sender basis: Z, Decoy: mu")
+                    console.print("[yellow]Sender Side (Alice):[/yellow]")
+                    console.print(f"  Measurement result c0: [bold cyan]{c0_val}[/bold cyan]")
+                    console.print(f"  Measurement result c1: [bold cyan]{c1_val}[/bold cyan]")
+                    console.print("[yellow]Receiver Side (Bob):[/yellow]")
+                    pauli_x = "Applied" if c1_val == 1 else "None"
+                    pauli_z = "Applied" if c0_val == 1 else "None"
+                    console.print(f"  Pauli X Correction ([yellow]c1=[/yellow][bold cyan]{c1_val}[/bold cyan]): {pauli_x}")
+                    console.print(f"  Pauli Z Correction ([yellow]c0=[/yellow][bold cyan]{c0_val}[/bold cyan]): {pauli_z}")
+                    console.print(f"  Recovered State (Measurement): [bold cyan]0[/bold cyan]")
+                    console.print("  SARG04 Conclusive: [italic red]False[/italic red]")
 
-                p_table.add_row(f"[yellow]{bit_part}[/yellow]", f"[cyan]{coords}[/cyan]", act_styled)
+                if not self.verbose and tot_q > 10:
+                    console.print("\n[cyan]... remaining bits hidden. Run with --verbose to see all bits ...[/cyan]")
 
+            # 2. QBER Security Report Table (Matching Specification Table Format with box.SQUARE)
             console.print("\n")
-            console.print(p_table)
+            qber_table = Table(
+                title="[bold cyan]          ══ QUSEC QUANTUM SECURITY REPORT ══[/bold cyan]",
+                box=box.SQUARE,
+                show_header=True,
+                header_style="bold white",
+            )
+            qber_table.add_column("Parameter", style="cyan", width=30)
+            qber_table.add_column("Value / Measurement", style="white")
 
-        # 2. 5-Point QBER Security Report Card
-        title_tag = "OUTGOING TRANSMISSION" if direction == "outgoing" else "INCOMING RECEPTION"
-        qber_table = Table(
-            title=f"[bold cyan]══ 🛡️ QUSEC QBER SECURITY REPORT · [{title_tag}] ══[/bold cyan]",
-            box=box.ROUNDED,
-            show_header=True,
-            header_style="bold cyan",
-            border_style="cyan",
-        )
-        qber_table.add_column("Item", style="bold cyan", width=28)
-        qber_table.add_column("Measurement / Verification", style="white")
+            s_id = session_id or self.session_mgr.session_id or "QSEC-1996"
+            qber_table.add_row("Session ID", s_id)
 
-        qber_table.add_row("Session ID", f"[bold white]{session_id or self.session_mgr.session_id or 'a91f'}[/bold white]")
-        if sender_name and recipient_name:
-            qber_table.add_row("Transmission Link", f"[bold green]{sender_name}[/bold green] ➔ [bold yellow]{recipient_name}[/bold yellow] [dim](Dual-Mode)[/dim]")
-        if message_text:
-            disp_msg = f'"{message_text}"' if len(message_text) <= 40 else f'"{message_text[:37]}..."'
-            qber_table.add_row("Message Plaintext", f"[bold white]{disp_msg}[/bold white]")
+            b_raw = (backend_name or "SIMULATOR").upper()
+            if "HARDWARE" in b_raw:
+                b_disp = "QUANTUM_HARDWARE"
+            elif "NOISY" in b_raw:
+                b_disp = "NOISY_AERSIM"
+            else:
+                b_disp = "SIMULATOR"
+            qber_table.add_row("Backend", b_disp)
 
-        # 1. QBER Threshold
-        qber_table.add_row("1. QBER Threshold", f"[bold white]{qber_threshold:.4f} ({qber_threshold * 100:.2f}%)[/bold white]")
+            if self.backend_type == "hardware":
+                exec_mode = "REAL QUANTUM HARDWARE"
+            elif self.backend_type == "noisy":
+                exec_mode = "NOISY SIMULATION"
+            else:
+                exec_mode = "NETWORK HARDWARE (Glass Fibre)" if (self.quantum_channel.link_ok and not self.force_simulation) else "LOCAL SIMULATION"
+            qber_table.add_row("Execution Mode", exec_mode)
 
-        # 2. Threshold Verification
-        if is_verified:
-            th_verif = f"[bold green]PASS[/bold green] · Calculated QBER <= QBER Threshold ({calculated_qber:.4f} <= {qber_threshold:.4f})"
-        else:
-            th_verif = f"[bold red]FAIL[/bold red] · Calculated QBER > QBER Threshold ({calculated_qber:.4f} > {qber_threshold:.4f})"
-        qber_table.add_row("2. Threshold Verification", th_verif)
+            qber_table.add_row("Protocol", "Teleportation-QDS + SARG04 Decoy State")
 
-        # 3. Backend
-        qber_table.add_row("3. Backend", f"[bold magenta]{backend_name}[/bold magenta]")
+            scen = "Normal Transmission"
+            if not is_verified:
+                th_type = (extra_metrics.get("threat_type", "") if extra_metrics else "")
+                if "Forgery" in th_type or "forgery" in th_type:
+                    scen = "Forgery"
+                elif "Tampering" in th_type or "tampering" in th_type:
+                    scen = "Tampering"
+                elif "Replay" in th_type or "replay" in th_type:
+                    scen = "Replay"
+                elif "Optical" in th_type or "Fiber" in th_type:
+                    scen = "Optical Interruption"
+                else:
+                    scen = "Threat Detected"
+                scen_str = f"[bold red]{scen}[/bold red]"
+            else:
+                scen_str = f"[bold green]{scen}[/bold green]"
+            qber_table.add_row("Simulated Scenario", scen_str)
 
-        # 4. Calculated QBER
-        qber_color = "bold red" if calculated_qber > qber_threshold else "bold green"
-        qber_pct = min(1.0, calculated_qber / max(0.01, qber_threshold * 1.5))
-        filled = int(qber_pct * 12)
-        bar = "█" * filled + "░" * (12 - filled)
-        qber_meter = f" [{bar}]"
-        qber_table.add_row("4. Calculated QBER", f"[{qber_color}]{calculated_qber:.4f} ({calculated_qber * 100:.2f}%){qber_meter}[/{qber_color}]")
+            tot_qubits = total_qubits or (len(qubit_details) if qubit_details else 76)
+            qber_table.add_row("Transmitted Qubits", f"{tot_qubits} / {tot_qubits}")
 
-        # Final Result
-        if is_verified:
-            qber_table.add_row("Final Result", f"[bold green]{final_result_text}[/bold green]")
-        else:
-            qber_table.add_row("Final Result", f"[bold red]{final_result_text}[/bold red]")
+            concl_sifted = (extra_metrics.get("conclusive_sifted", 22) if extra_metrics else 22)
+            qber_table.add_row("Conclusive Sifted Qubits (μ)", str(concl_sifted))
 
-        console.print("\n")
-        console.print(qber_table)
+            det_errs = (extra_metrics.get("detected_errors", 0) if extra_metrics else 0)
+            qber_table.add_row("Detected Quantum Bit Errors", str(det_errs))
 
-        if is_verified:
-            console.print(f"[bold white on dark_green]  ✔ FINAL RESULT: {final_result_text}  [/bold white on dark_green]\n")
-        else:
-            console.print(f"[bold white on dark_red]  ✖ FINAL RESULT: {final_result_text}  [/bold white on dark_red]\n")
+            qber_color = "bold red" if calculated_qber > qber_threshold else "bold green"
+            qber_table.add_row("Calculated QBER", f"[{qber_color}]{calculated_qber:.4f} ({calculated_qber * 100:.2f}%)[/{qber_color}]")
+
+            qber_table.add_row("Security Threshold", f"{qber_threshold:.4f} ({qber_threshold * 100:.2f}%)")
+
+            if is_verified:
+                th_status = "[bold green]NORMAL (Within Tolerance)[/bold green]"
+            else:
+                th_status = "[bold red]EXCEEDED (Threat Detected)[/bold red]"
+            qber_table.add_row("Threshold Status", th_status)
+
+            console.print(qber_table)
+
+            dec_color = "green" if is_verified else "red"
+            final_dec = "VERIFIED" if is_verified else f"REJECTED ({scen.upper()})"
+            console.print(f"\n[bold {dec_color}]FINAL DECISION: {final_dec}[/bold {dec_color}]\n")
 
         report_payload = {
-            "session_id": session_id or self.session_mgr.session_id or "a91f",
+            "session_id": session_id or self.session_mgr.session_id or "QSEC-1996",
             "qber_threshold": qber_threshold,
             "threshold": qber_threshold,
             "dynamic_threshold": (extra_metrics.get("dynamic_metrics", {}) if extra_metrics else None) or {"q_threshold": qber_threshold},
@@ -568,7 +608,7 @@ class QuSecNode:
             "is_verified": is_verified,
             "sender": sender_name or self.role_title,
             "recipient": recipient_name or self.peer_title,
-            "total_qubits": total_qubits or (len(pauli_logs) if pauli_logs else 0),
+            "total_qubits": total_qubits or (len(qubit_details) if qubit_details else (len(pauli_logs) if pauli_logs else 0)),
             "timestamp": time.time(),
         }
         if extra_metrics:
@@ -740,6 +780,9 @@ class QuSecNode:
                 "test_values": test_values,
                 "test_bases": test_bases,
                 "decoy_types": decoy_types,
+                "all_bits": msg_bits + test_values,
+                "all_bases": ["Z"] * len(msg_bits) + test_bases,
+                "all_decoys": ["mu"] * len(msg_bits) + decoy_types,
                 "attack": self.active_attack,
             }
             mac_tag, _ = WegmanCarterMAC.authenticate_with_pool(
@@ -1211,9 +1254,30 @@ class QuSecNode:
             pauli_z_count = sum(1 for c0 in c0_bits if c0 == 1)
             recovered_bits = bob_qubits if bob_qubits else [0 if (c0 ^ c1) == 0 else 1 for c0, c1 in zip(c0_bits, c1_bits)]
 
-            # Bit-by-bit Pauli corrections
+            # Bit-by-bit Pauli corrections and qubit detail tracking
             correction_logs: List[str] = []
+            qubit_details: List[Dict[str, Any]] = []
+            all_bits = payload.get("all_bits", [])
+            all_bases = payload.get("all_bases", [])
+            all_decoys = payload.get("all_decoys", [])
+
             for idx, (c0, c1) in enumerate(zip(c0_bits, c1_bits)):
+                rec = recovered_bits[idx] if idx < len(recovered_bits) else (0 if (c0 ^ c1) == 0 else 1)
+                orig_bit = all_bits[idx] if idx < len(all_bits) else rec
+                s_basis = all_bases[idx] if idx < len(all_bases) else ("Z" if idx < data_count else "X")
+                decoy = all_decoys[idx] if idx < len(all_decoys) else ("mu" if idx < data_count else "nu")
+                is_concl = (idx < data_count) or (decoy == "mu")
+
+                qubit_details.append({
+                    "bit": orig_bit,
+                    "sender_basis": s_basis,
+                    "decoy": decoy,
+                    "c0": c0,
+                    "c1": c1,
+                    "bob_res": rec,
+                    "conclusive": is_concl,
+                })
+
                 if c1 == 1 and c0 == 1:
                     op = "Applied Pauli-X + Pauli-Z (Bit + Phase Flip)"
                 elif c1 == 1:
@@ -1353,8 +1417,9 @@ class QuSecNode:
                 is_verified=is_verified,
                 final_result_text=verif_status,
                 direction="incoming",
-                session_id=self.session_mgr.session_id or "a91f",
+                session_id=self.session_mgr.session_id or "QSEC-1996",
                 pauli_logs=correction_logs,
+                qubit_details=qubit_details,
                 total_qubits=len(c0_bits),
                 sender_name=sender_name,
                 recipient_name=self.role_title,

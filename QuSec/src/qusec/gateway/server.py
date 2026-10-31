@@ -535,7 +535,16 @@ class GatewayServer:
 
     def start(self):
         handler_cls = make_gateway_handler(self.context)
-        self._server = ThreadingHTTPServer((self.host, self.port), handler_cls)
+        try:
+            self._server = ThreadingHTTPServer((self.host, self.port), handler_cls)
+        except OSError as e:
+            if getattr(e, "errno", None) in (48, 98):
+                alt_port = 8766 if self.port == 8765 else 8765
+                logger.info("Port %d in use, falling back to port %d", self.port, alt_port)
+                self.port = alt_port
+                self._server = ThreadingHTTPServer((self.host, self.port), handler_cls)
+            else:
+                raise
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
         logger.info("QuSec Gateway Server running on http://%s:%d", self.host, self.port)
