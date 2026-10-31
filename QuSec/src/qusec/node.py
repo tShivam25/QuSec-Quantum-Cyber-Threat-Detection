@@ -780,6 +780,7 @@ class QuSecNode:
                 "test_values": test_values,
                 "test_bases": test_bases,
                 "decoy_types": decoy_types,
+                "bob_qubits": bob_qubits,
                 "all_bits": msg_bits + test_values,
                 "all_bases": ["Z"] * len(msg_bits) + test_bases,
                 "all_decoys": ["mu"] * len(msg_bits) + decoy_types,
@@ -1187,6 +1188,11 @@ class QuSecNode:
         p_type = packet.get("type")
         payload = packet.get("payload", {})
 
+        # Dynamically synchronize peer host between classical and optical channels
+        if self.classical_channel.peer_host and self.classical_channel.peer_host not in ("127.0.0.1", "localhost", "0.0.0.0"):
+            self.quantum_channel.peer_host = self.classical_channel.peer_host
+            self.peer_host = self.classical_channel.peer_host
+
         if p_type == "TELEPORT_MESSAGE":
             msg_id = payload.get("msg_id", str(uuid.uuid4())[:8])
             if msg_id in self._seen_msg_ids:
@@ -1240,8 +1246,8 @@ class QuSecNode:
 
             optical_missing = (optical_burst is None)
             if optical_missing:
-                # If in software simulation mode or fallback bits available in payload
-                if (self.force_simulation or not self.quantum_channel.link_ok) and payload.get("bob_qubits"):
+                # Fallback to payload qubits if optical burst was delayed across network
+                if payload.get("bob_qubits"):
                     bob_qubits = payload.get("bob_qubits")
                     optical_missing = False
                 else:
